@@ -40,7 +40,7 @@ As GraphQL:
 
 ```graphql 
 {
-  search(input: { type: "DATASET", query: "my sql dataset", start: 0, count: 10 }) {
+  search(input: { type: DATASET, query: "my sql dataset", start: 0, count: 10 }) {
     start
     count
     total
@@ -68,6 +68,49 @@ curl --location --request POST 'http://localhost:8080/api/graphql' \
 
 Note that per-field filtering criteria may additionally be provided. 
 
+### Querying for owners of a dataset
+
+As GraphQL:
+
+```graphql
+query {
+  dataset(urn: "urn:li:dataset:(urn:li:dataPlatform:hdfs,SampleHdfsDataset,PROD)") {
+    ownership {
+      owners {
+        owner {
+          ... on CorpUser {
+            urn
+            type
+          }
+          ... on CorpGroup {
+            urn
+            type
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Querying for tags of a dataset
+
+As GraphQL:
+
+```graphql 
+query {
+  dataset(urn: "urn:li:dataset:(urn:li:dataPlatform:hdfs,SampleHdfsDataset,PROD)") {
+    tags {
+      tags {
+        tag {
+          name
+        }
+      }
+    }
+  }
+}
+```
+
 ### Coming soon
 
 List Metadata Entities! listDatasets, listDashboards, listCharts, listDataFlows, listDataJobs, listTags
@@ -79,7 +122,7 @@ DataHub provides the following GraphQL mutations for updating entities in your M
 
 ### Authorization
 
-Mutations which change Entity metadata are subject to [DataHub Access Policies](../../../docs/policies.md). This means that DataHub's server
+Mutations which change Entity metadata are subject to [DataHub Access Policies](../../authorization/policies.md). This means that DataHub's server
 will check whether the requesting actor is authorized to perform the action. If you're querying the GraphQL endpoint via the DataHub
 Proxy Server, which is discussed more in [Getting Started](./getting-started.md), then the Session Cookie provided will carry the actor information.
 If you're querying the Metadata Service API directly, then you'll have to provide this via a special `X-DataHub-Actor` HTTP header, which should

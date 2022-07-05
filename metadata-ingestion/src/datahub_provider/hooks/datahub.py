@@ -11,7 +11,10 @@ except ModuleNotFoundError:
 
     AIRFLOW_1 = True
 
-from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
+from datahub.metadata.com.linkedin.pegasus2avro.mxe import (
+    MetadataChangeEvent,
+    MetadataChangeProposal,
+)
 
 if TYPE_CHECKING:
     from datahub.emitter.kafka_emitter import DatahubKafkaEmitter
@@ -79,6 +82,12 @@ class DatahubRestHook(BaseHook):
         for mce in mces:
             emitter.emit_mce(mce)
 
+    def emit_mcps(self, mcps: List[MetadataChangeProposal]) -> None:
+        emitter = self.make_emitter()
+
+        for mce in mcps:
+            emitter.emit_mcp(mce)
+
 
 class DatahubKafkaHook(BaseHook):
     """
@@ -127,7 +136,9 @@ class DatahubKafkaHook(BaseHook):
                 raise AirflowException(
                     "Kafka broker specified twice (present in host and extra)"
                 )
-            obj["connection"]["bootstrap"] = conn.host
+            obj["connection"]["bootstrap"] = ":".join(
+                map(str, filter(None, [conn.host, conn.port]))
+            )
         config = datahub.ingestion.sink.datahub_kafka.KafkaSinkConfig.parse_obj(obj)
         return config
 
@@ -152,6 +163,22 @@ class DatahubKafkaHook(BaseHook):
 
         if errors:
             raise AirflowException(f"failed to push some MCEs: {errors}")
+
+    def emit_mcps(self, mcps: List[MetadataChangeProposal]) -> None:
+        emitter = self.make_emitter()
+        errors = []
+
+        def callback(exc, msg):
+            if exc:
+                errors.append(exc)
+
+        for mcp in mcps:
+            emitter.emit_mcp_async(mcp, callback)
+
+        emitter.flush()
+
+        if errors:
+            raise AirflowException(f"failed to push some MCPs: {errors}")
 
 
 class DatahubGenericHook(BaseHook):

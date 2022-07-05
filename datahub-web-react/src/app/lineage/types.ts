@@ -1,3 +1,4 @@
+import { FullLineageResultsFragment } from '../../graphql/lineage.generated';
 import {
     Chart,
     Dashboard,
@@ -9,6 +10,9 @@ import {
     MlFeature,
     MlModel,
     MlModelGroup,
+    Maybe,
+    Status,
+    DataPlatform,
 } from '../../types.generated';
 
 export type EntitySelectParams = {
@@ -25,19 +29,27 @@ export type LineageExpandParams = {
 export type FetchedEntity = {
     urn: string;
     name: string;
+    // name to be shown on expansion if available
+    expandedName?: string;
     type: EntityType;
     subtype?: string;
     icon?: string;
     // children?: Array<string>;
     upstreamChildren?: Array<EntityAndType>;
+    numUpstreamChildren?: number;
     downstreamChildren?: Array<EntityAndType>;
+    numDownstreamChildren?: number;
     fullyFetched?: boolean;
     platform?: string;
+    status?: Maybe<Status>;
+    siblingPlatforms?: Maybe<DataPlatform[]>;
 };
 
 export type NodeData = {
     urn?: string;
     name: string;
+    // name to be shown on expansion if available
+    expandedName?: string;
     type?: EntityType;
     subtype?: string;
     children?: Array<NodeData>;
@@ -47,6 +59,8 @@ export type NodeData = {
     // Currently our visualization does not support expanding in two directions
     countercurrentChildrenUrns?: string[];
     platform?: string;
+    status?: Maybe<Status>;
+    siblingPlatforms?: Maybe<DataPlatform[]>;
 };
 
 export type VizNode = {
@@ -79,7 +93,7 @@ export type TreeProps = {
     fetchedEntities: { [x: string]: FetchedEntity };
     onEntityClick: (EntitySelectParams) => void;
     onEntityCenter: (EntitySelectParams) => void;
-    onLineageExpand: (LineageExpandParams) => void;
+    onLineageExpand: (data: EntityAndType) => void;
     selectedEntity?: EntitySelectParams;
     hoveredEntity?: EntitySelectParams;
 };
@@ -121,3 +135,9 @@ export type EntityAndType =
           type: EntityType.MlprimaryKey;
           entity: MlPrimaryKey;
       };
+
+export interface LineageResult {
+    urn: string;
+    upstream?: Maybe<{ __typename?: 'EntityLineageResult' } & FullLineageResultsFragment>;
+    downstream?: Maybe<{ __typename?: 'EntityLineageResult' } & FullLineageResultsFragment>;
+}

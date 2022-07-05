@@ -2,6 +2,7 @@ query getUser($urn: String!, $groupsCount: Int!) {
     corpUser(urn: $urn) {
         urn
         username
+        isNativeUser
         info {
             active
             displayName
@@ -10,11 +11,18 @@ query getUser($urn: String!, $groupsCount: Int!) {
             lastName
             fullName
             email
+            departmentName
         }
-        editableInfo {
+        editableProperties {
+            slack
+            phone
             pictureLink
+            aboutMe
             teams
             skills
+            displayName
+            title
+            email
         }
         globalTags {
             ...globalTagsFields
@@ -83,6 +91,7 @@ query listUsers($input: ListUsersInput!) {
         users {
             urn
             username
+            isNativeUser
             info {
                 active
                 displayName
@@ -92,9 +101,11 @@ query listUsers($input: ListUsersInput!) {
                 fullName
                 email
             }
-            editableInfo {
+            editableProperties {
+                displayName
                 pictureLink
                 teams
+                title
                 skills
             }
             status
@@ -109,3 +120,28 @@ mutation removeUser($urn: String!) {
 mutation updateUserStatus($urn: String!, $status: CorpUserStatus!) {
     updateUserStatus(urn: $urn, status: $status)
 }
+
+mutation updateCorpUserProperties($urn: String!, $input: CorpUserUpdateInput!) {
+    updateCorpUserProperties(urn: $urn, input: $input) {
+        urn
+    }
+}
+
+mutation createNativeUserInviteToken {
+    createNativeUserInviteToken {
+        inviteToken
+    }
+}
+
+query getNativeUserInviteToken {
+    getNativeUserInviteToken {
+        inviteToken
+    }
+}
+
+mutation createNativeUserResetToken($input: CreateNativeUserResetTokenInput!)  {
+    createNativeUserResetToken(input: $input) {
+        resetToken
+    }
+}
+

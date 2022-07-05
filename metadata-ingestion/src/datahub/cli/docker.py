@@ -18,6 +18,8 @@ from datahub.cli.docker_check import (
     get_client_with_error,
 )
 from datahub.ingestion.run.pipeline import Pipeline
+from datahub.telemetry import telemetry
+from datahub.upgrade import upgrade
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ M1_QUICKSTART_COMPOSE_FILE = (
 
 BOOTSTRAP_MCES_FILE = "metadata-ingestion/examples/mce_files/bootstrap_mce.json"
 
-GITHUB_BASE_URL = "https://raw.githubusercontent.com/linkedin/datahub/master"
+GITHUB_BASE_URL = "https://raw.githubusercontent.com/datahub-project/datahub/master"
 GITHUB_NEO4J_AND_ELASTIC_QUICKSTART_COMPOSE_URL = (
     f"{GITHUB_BASE_URL}/{NEO4J_AND_ELASTIC_QUICKSTART_COMPOSE_FILE}"
 )
@@ -72,6 +74,8 @@ def docker_check_impl() -> None:
 
 
 @docker.command()
+@upgrade.check_upgrade
+@telemetry.with_telemetry
 def check() -> None:
     """Check that the Docker containers are healthy"""
     docker_check_impl()
@@ -131,8 +135,8 @@ def should_use_neo4j_for_graph_service(graph_service_override: Optional[str]) ->
 @click.option(
     "--version",
     type=str,
-    default="head",
-    help="Datahub version to be deployed. If not set, deploy latest",
+    default=None,
+    help="Datahub version to be deployed. If not set, deploy using the defaults from the quickstart compose",
 )
 @click.option(
     "--build-locally",
@@ -162,6 +166,8 @@ def should_use_neo4j_for_graph_service(graph_service_override: Optional[str]) ->
     default=None,
     help="If set, forces docker-compose to use that graph service implementation",
 )
+@upgrade.check_upgrade
+@telemetry.with_telemetry
 def quickstart(
     version: str,
     build_locally: bool,
@@ -215,7 +221,8 @@ def quickstart(
             logger.debug(f"Copied to {path}")
 
     # set version
-    os.environ["DATAHUB_VERSION"] = version
+    if version is not None:
+        os.environ["DATAHUB_VERSION"] = version
 
     base_command: List[str] = [
         "docker-compose",
@@ -227,13 +234,18 @@ def quickstart(
     ]
 
     # Pull and possibly build the latest containers.
-    subprocess.run(
-        [
-            *base_command,
-            "pull",
-        ],
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [*base_command, "pull"],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        click.secho(
+            "Error while pulling images. Going to attempt to move on to docker-compose up assuming the images have "
+            "been built locally",
+            fg="red",
+        )
+
     if build_locally:
         subprocess.run(
             [
@@ -290,7 +302,7 @@ def quickstart(
         _print_issue_list_and_exit(
             issues,
             header="Unable to run quickstart - the following issues were detected:",
-            footer="If you think something went wrong, please file an issue at https://github.com/linkedin/datahub/issues\n"
+            footer="If you think something went wrong, please file an issue at https://github.com/datahub-project/datahub/issues\n"
             "or send a message in our Slack https://slack.datahubproject.io/\n"
             f"Be sure to attach the logs from {log_file.name}",
         )
@@ -315,7 +327,15 @@ def quickstart(
     type=click.Path(exists=True, dir_okay=False),
     help=f"The MCE json file to ingest. Defaults to downloading {BOOTSTRAP_MCES_FILE} from GitHub",
 )
-def ingest_sample_data(path: Optional[str]) -> None:
+@click.option(
+    "--token",
+    type=str,
+    is_flag=False,
+    default=None,
+    help="The token to be used when ingesting, used when datahub is deployed with METADATA_SERVICE_AUTH_ENABLED=true",
+)
+@telemetry.with_telemetry
+def ingest_sample_data(path: Optional[str], token: Optional[str]) -> None:
     """Ingest sample data into a running DataHub instance."""
 
     if path is None:
@@ -340,27 +360,38 @@ def ingest_sample_data(path: Optional[str]) -> None:
 
     # Run ingestion.
     click.echo("Starting ingestion...")
-    pipeline = Pipeline.create(
-        {
-            "source": {
-                "type": "file",
-                "config": {
-                    "filename": path,
-                },
+    recipe: dict = {
+        "source": {
+            "type": "file",
+            "config": {
+                "filename": path,
             },
-            "sink": {
-                "type": "datahub-rest",
-                "config": {"server": "http://localhost:8080"},
-            },
-        }
-    )
+        },
+        "sink": {
+            "type": "datahub-rest",
+            "config": {"server": "http://localhost:8080"},
+        },
+    }
+
+    if token is not None:
+        recipe["sink"]["config"]["token"] = token
+
+    pipeline = Pipeline.create(recipe)
     pipeline.run()
     ret = pipeline.pretty_print_summary()
     sys.exit(ret)
 
 
 @docker.command()
-def nuke() -> None:
+@telemetry.with_telemetry
+@click.option(
+    "--keep-data",
+    type=bool,
+    is_flag=True,
+    default=False,
+    help="Delete data volumes",
+)
+def nuke(keep_data: bool) -> None:
     """Remove all Docker containers, networks, and volumes associated with DataHub."""
 
     with get_client_with_error() as (client, error):
@@ -376,11 +407,14 @@ def nuke() -> None:
         ):
             container.remove(v=True, force=True)
 
-        click.echo("Removing volumes in the datahub project")
-        for volume in client.volumes.list(
-            filters={"label": "com.docker.compose.project=datahub"}
-        ):
-            volume.remove(force=True)
+        if keep_data:
+            click.echo("Skipping deleting data volumes in the datahub project")
+        else:
+            click.echo("Removing volumes in the datahub project")
+            for volume in client.volumes.list(
+                filters={"label": "com.docker.compose.project=datahub"}
+            ):
+                volume.remove(force=True)
 
         click.echo("Removing networks in the datahub project")
         for network in client.networks.list(

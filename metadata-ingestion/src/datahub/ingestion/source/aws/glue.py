@@ -1,3 +1,4 @@
+import logging
 import typing
 from collections import defaultdict
 from dataclasses import dataclass
@@ -6,49 +7,126 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Un
 from urllib.parse import urlparse
 
 import yaml
+from pydantic import validator
+from pydantic.fields import Field
 
+from datahub.configuration.common import AllowDenyPattern, ConfigurationError
+from datahub.configuration.source_common import PlatformSourceConfigBase
 from datahub.emitter import mce_builder
+from datahub.emitter.mce_builder import (
+    get_sys_time,
+    make_data_platform_urn,
+    make_dataplatform_instance_urn,
+    make_dataset_urn_with_platform_instance,
+    make_domain_urn,
+    make_tag_urn,
+)
+from datahub.emitter.mcp import MetadataChangeProposalWrapper
+from datahub.emitter.mcp_builder import (
+    DatabaseKey,
+    add_dataset_to_container,
+    add_domain_to_entity_wu,
+    gen_containers,
+)
 from datahub.ingestion.api.common import PipelineContext
+from datahub.ingestion.api.decorators import (
+    SourceCapability,
+    SupportStatus,
+    capability,
+    config_class,
+    platform_name,
+    support_status,
+)
 from datahub.ingestion.api.source import Source, SourceReport
 from datahub.ingestion.api.workunit import MetadataWorkUnit
-from datahub.ingestion.source.aws.aws_common import AwsSourceConfig, make_s3_urn
+from datahub.ingestion.source.aws import s3_util
+from datahub.ingestion.source.aws.aws_common import AwsSourceConfig
+from datahub.ingestion.source.aws.s3_util import make_s3_urn
+from datahub.ingestion.source.glue_profiling_config import GlueProfilingConfig
 from datahub.metadata.com.linkedin.pegasus2avro.common import Status
 from datahub.metadata.com.linkedin.pegasus2avro.metadata.snapshot import DatasetSnapshot
 from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
 from datahub.metadata.com.linkedin.pegasus2avro.schema import (
-    ArrayTypeClass,
-    BooleanTypeClass,
-    BytesTypeClass,
-    DateTypeClass,
     MySqlDDL,
-    NullTypeClass,
-    NumberTypeClass,
     SchemaField,
-    SchemaFieldDataType,
     SchemaMetadata,
-    StringTypeClass,
-    TimeTypeClass,
-    UnionTypeClass,
 )
 from datahub.metadata.schema_classes import (
+    ChangeTypeClass,
     DataFlowInfoClass,
     DataFlowSnapshotClass,
     DataJobInfoClass,
     DataJobInputOutputClass,
     DataJobSnapshotClass,
+    DataPlatformInstanceClass,
+    DatasetFieldProfileClass,
+    DatasetLineageTypeClass,
+    DatasetProfileClass,
     DatasetPropertiesClass,
-    MapTypeClass,
+    GlobalTagsClass,
     MetadataChangeEventClass,
     OwnerClass,
     OwnershipClass,
     OwnershipTypeClass,
+    PartitionSpecClass,
+    PartitionTypeClass,
+    TagAssociationClass,
+    UpstreamClass,
+    UpstreamLineageClass,
 )
+from datahub.utilities.hive_schema_to_avro import get_schema_fields_for_hive_column
+
+logger = logging.getLogger(__name__)
 
 
-class GlueSourceConfig(AwsSourceConfig):
+DEFAULT_PLATFORM = "glue"
+VALID_PLATFORMS = [DEFAULT_PLATFORM, "athena"]
 
-    extract_transforms: Optional[bool] = True
-    underlying_platform: Optional[str] = None
+
+class GlueSourceConfig(AwsSourceConfig, PlatformSourceConfigBase, GlueProfilingConfig):
+
+    extract_owners: Optional[bool] = Field(
+        default=True,
+        description="When enabled, extracts ownership from Glue directly and overwrites existing owners. When disabled, ownership is left empty for datasets.",
+    )
+    extract_transforms: Optional[bool] = Field(
+        default=True, description="Whether to extract Glue transform jobs."
+    )
+    underlying_platform: Optional[str] = Field(
+        default=None,
+        description="@deprecated(Use `platform`) Override for platform name. Allowed values - `glue`, `athena`",
+    )
+    ignore_unsupported_connectors: Optional[bool] = Field(
+        default=True,
+        description="Whether to ignore unsupported connectors. If disabled, an error will be raised.",
+    )
+    emit_s3_lineage: bool = Field(
+        default=False, description=" Whether to emit S3-to-Glue lineage."
+    )
+    glue_s3_lineage_direction: str = Field(
+        default="upstream",
+        description="If `upstream`, S3 is upstream to Glue. If `downstream` S3 is downstream to Glue.",
+    )
+    domain: Dict[str, AllowDenyPattern] = Field(
+        default=dict(),
+        description="regex patterns for tables to filter to assign domain_key. ",
+    )
+    catalog_id: Optional[str] = Field(
+        default=None,
+        description="The aws account id where the target glue catalog lives. If None, datahub will ingest glue in aws caller's account.",
+    )
+    use_s3_bucket_tags: Optional[bool] = Field(
+        default=False,
+        description="If an S3 Buckets Tags should be created for the Tables ingested by Glue. Please Note that this will not apply tags to any folders ingested, only the files.",
+    )
+    use_s3_object_tags: Optional[bool] = Field(
+        default=False,
+        description="If an S3 Objects Tags should be created for the Tables ingested by Glue.",
+    )
+    profiling: GlueProfilingConfig = Field(
+        default=None,
+        description="Configs to ingest data profiles from glue table",
+    )
 
     @property
     def glue_client(self):
@@ -57,6 +135,32 @@ class GlueSourceConfig(AwsSourceConfig):
     @property
     def s3_client(self):
         return self.get_s3_client()
+
+    @validator("glue_s3_lineage_direction")
+    def check_direction(cls, v: str) -> str:
+        if v.lower() not in ["upstream", "downstream"]:
+            raise ConfigurationError(
+                "glue_s3_lineage_direction must be either upstream or downstream"
+            )
+        return v.lower()
+
+    @validator("underlying_platform")
+    def underlying_platform_validator(cls, v: str) -> str:
+        if not v or v in VALID_PLATFORMS:
+            return v
+        else:
+            raise ConfigurationError(
+                f"'underlying_platform' can only take following values: {VALID_PLATFORMS}"
+            )
+
+    @validator("platform")
+    def platform_validator(cls, v: str) -> str:
+        if not v or v in VALID_PLATFORMS:
+            return v
+        else:
+            raise ConfigurationError(
+                f"'platform' can only take following values: {VALID_PLATFORMS}"
+            )
 
 
 @dataclass
@@ -71,18 +175,67 @@ class GlueSourceReport(SourceReport):
         self.filtered.append(table)
 
 
+@platform_name("Glue")
+@config_class(GlueSourceConfig)
+@support_status(SupportStatus.CERTIFIED)
+@capability(SourceCapability.PLATFORM_INSTANCE, "Enabled by default")
+@capability(SourceCapability.DOMAINS, "Supported via the `domain` config field")
 class GlueSource(Source):
+    """
+    Note: if you also have files in S3 that you'd like to ingest, we recommend you use Glue's built-in data catalog. See [here](../../../../docs/generated/ingestion/sources/s3.md) for a quick guide on how to set up a crawler on Glue and ingest the outputs with DataHub.
+
+    This plugin extracts the following:
+
+    - Tables in the Glue catalog
+    - Column types associated with each table
+    - Table metadata, such as owner, description and parameters
+    - Jobs and their component transformations, data sources, and data sinks
+
+    ## IAM permissions
+
+    For ingesting datasets, the following IAM permissions are required:
+    ```json
+    {
+        "Effect": "Allow",
+        "Action": [
+            "glue:GetDatabases",
+            "glue:GetTables"
+        ],
+        "Resource": [
+            "arn:aws:glue:$region-id:$account-id:catalog",
+            "arn:aws:glue:$region-id:$account-id:database/*",
+            "arn:aws:glue:$region-id:$account-id:table/*"
+        ]
+    }
+    ```
+
+    For ingesting jobs (`extract_transforms: True`), the following additional permissions are required:
+    ```json
+    {
+        "Effect": "Allow",
+        "Action": [
+            "glue:GetDataflowGraph",
+            "glue:GetJobs",
+        ],
+        "Resource": "*"
+    }
+    ```
+
+    plus `s3:GetObject` for the job script locations.
+
+    """
+
     source_config: GlueSourceConfig
     report = GlueSourceReport()
 
     def __init__(self, config: GlueSourceConfig, ctx: PipelineContext):
         super().__init__(ctx)
+        self.extract_owners = config.extract_owners
         self.source_config = config
         self.report = GlueSourceReport()
         self.glue_client = config.glue_client
         self.s3_client = config.s3_client
         self.extract_transforms = config.extract_transforms
-        self.underlying_platform = config.underlying_platform
         self.env = config.env
 
     @classmethod
@@ -90,14 +243,22 @@ class GlueSource(Source):
         config = GlueSourceConfig.parse_obj(config_dict)
         return cls(config, ctx)
 
-    def get_underlying_platform(self):
-        if self.underlying_platform in ["athena"]:
-            return self.underlying_platform
-        return "glue"
+    @property
+    def platform(self) -> str:
+        """
+        This deprecates "underlying_platform" field in favour of the standard "platform" one, which has
+        more priority when both are defined.
+        :return: platform, otherwise underlying_platform, otherwise "glue"
+        """
+        return (
+            self.source_config.platform
+            or self.source_config.underlying_platform
+            or DEFAULT_PLATFORM
+        )
 
     def get_all_jobs(self):
         """
-        List all jobs in Glue.
+        List all jobs in Glue. boto3 get_jobs api call doesn't support cross account access.
         """
 
         jobs = []
@@ -217,7 +378,12 @@ class GlueSource(Source):
                 full_table_name = f"{node_args['database']}.{node_args['table_name']}"
 
                 # we know that the table will already be covered when ingesting Glue tables
-                node_urn = f"urn:li:dataset:(urn:li:dataPlatform:{self.get_underlying_platform()},{full_table_name},{self.env})"
+                node_urn = make_dataset_urn_with_platform_instance(
+                    platform=self.platform,
+                    name=full_table_name,
+                    env=self.env,
+                    platform_instance=self.source_config.platform_instance,
+                )
 
             # if data object is S3 bucket
             elif node_args.get("connection_type") == "s3":
@@ -234,9 +400,8 @@ class GlueSource(Source):
                 # append S3 format if different ones exist
                 if len(s3_formats[s3_uri]) > 1:
                     node_urn = make_s3_urn(
-                        s3_uri,
+                        f"{s3_uri}.{node_args.get('format')}",
                         self.env,
-                        suffix=node_args.get("format"),
                     )
 
                 else:
@@ -262,7 +427,16 @@ class GlueSource(Source):
 
             else:
 
-                raise ValueError(f"Unrecognized Glue data object type: {node_args}")
+                if self.source_config.ignore_unsupported_connectors:
+
+                    logger.info(
+                        flow_urn,
+                        f"Unrecognized Glue data object type: {node_args}. Skipping.",
+                    )
+                    return None
+                else:
+
+                    raise ValueError(f"Unrecognized Glue data object type: {node_args}")
 
         # otherwise, a node represents a transformation
         else:
@@ -315,8 +489,19 @@ class GlueSource(Source):
         # traverse edges to fill in node properties
         for edge in dataflow_graph["DagEdges"]:
 
-            source_node = nodes[edge["Source"]]
-            target_node = nodes[edge["Target"]]
+            source_node = nodes.get(edge["Source"])
+            target_node = nodes.get(edge["Target"])
+
+            # Currently, in case of unsupported connectors,
+            # Source and Target for some edges is not available
+            # in nodes. this may lead to broken edge in lineage.
+            if source_node is None or target_node is None:
+                logger.warning(
+                    flow_urn,
+                    f"Unrecognized source or target node in edge: {edge}. Skipping.\
+                        This may lead to broken edge in lineage",
+                )
+                continue
 
             source_node_type = source_node["NodeType"]
             target_node_type = target_node["NodeType"]
@@ -424,7 +609,15 @@ class GlueSource(Source):
 
             # see https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/glue.html#Glue.Client.get_tables
             paginator = self.glue_client.get_paginator("get_tables")
-            for page in paginator.paginate(DatabaseName=database_name):
+
+            if self.source_config.catalog_id:
+                paginator_response = paginator.paginate(
+                    DatabaseName=database_name, CatalogId=self.source_config.catalog_id
+                )
+            else:
+                paginator_response = paginator.paginate(DatabaseName=database_name)
+
+            for page in paginator_response:
                 new_tables += page["TableList"]
 
             return new_tables
@@ -434,7 +627,15 @@ class GlueSource(Source):
 
             # see https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/glue.html#Glue.Client.get_databases
             paginator = self.glue_client.get_paginator("get_databases")
-            for page in paginator.paginate():
+
+            if self.source_config.catalog_id:
+                paginator_response = paginator.paginate(
+                    CatalogId=self.source_config.catalog_id
+                )
+            else:
+                paginator_response = paginator.paginate()
+
+            for page in paginator_response:
                 for db in page["DatabaseList"]:
                     if self.source_config.database_pattern.allowed(db["Name"]):
                         database_names.append(db["Name"])
@@ -451,8 +652,256 @@ class GlueSource(Source):
             all_tables += get_tables_from_database(database)
         return all_tables
 
-    def get_workunits(self) -> Iterable[MetadataWorkUnit]:
+    def get_lineage_if_enabled(
+        self, mce: MetadataChangeEventClass
+    ) -> Optional[MetadataChangeProposalWrapper]:
+        if self.source_config.emit_s3_lineage:
+            # extract dataset properties aspect
+            dataset_properties: Optional[
+                DatasetPropertiesClass
+            ] = mce_builder.get_aspect_if_available(mce, DatasetPropertiesClass)
+            if dataset_properties and "Location" in dataset_properties.customProperties:
+                location = dataset_properties.customProperties["Location"]
+                if location.startswith("s3://"):
+                    s3_dataset_urn = make_s3_urn(location, self.source_config.env)
+                    if self.source_config.glue_s3_lineage_direction == "upstream":
+                        upstream_lineage = UpstreamLineageClass(
+                            upstreams=[
+                                UpstreamClass(
+                                    dataset=s3_dataset_urn,
+                                    type=DatasetLineageTypeClass.COPY,
+                                )
+                            ]
+                        )
+                        mcp = MetadataChangeProposalWrapper(
+                            entityType="dataset",
+                            entityUrn=mce.proposedSnapshot.urn,
+                            changeType=ChangeTypeClass.UPSERT,
+                            aspectName="upstreamLineage",
+                            aspect=upstream_lineage,
+                        )
+                        return mcp
+                    else:
+                        # Need to mint the s3 dataset with upstream lineage from it to glue
+                        upstream_lineage = UpstreamLineageClass(
+                            upstreams=[
+                                UpstreamClass(
+                                    dataset=mce.proposedSnapshot.urn,
+                                    type=DatasetLineageTypeClass.COPY,
+                                )
+                            ]
+                        )
+                        mcp = MetadataChangeProposalWrapper(
+                            entityType="dataset",
+                            entityUrn=s3_dataset_urn,
+                            changeType=ChangeTypeClass.UPSERT,
+                            aspectName="upstreamLineage",
+                            aspect=upstream_lineage,
+                        )
+                        return mcp
+        return None
 
+    def _create_profile_mcp(
+        self,
+        mce: MetadataChangeEventClass,
+        table_stats: dict,
+        column_stats: dict,
+        partition_spec: Optional[str] = None,
+    ) -> MetadataChangeProposalWrapper:
+        # instantiate profile class
+        dataset_profile = DatasetProfileClass(timestampMillis=get_sys_time())
+
+        # Inject table level stats
+        if self.source_config.profiling.row_count in table_stats:
+            dataset_profile.rowCount = int(
+                float(table_stats[self.source_config.profiling.row_count])
+            )
+        if self.source_config.profiling.column_count in table_stats:
+            dataset_profile.columnCount = int(
+                float(table_stats[self.source_config.profiling.column_count])
+            )
+
+        # inject column level stats
+        dataset_profile.fieldProfiles = []
+        for profile in column_stats:
+            column_name = profile["Name"]
+
+            # some columns may not be profiled
+            if "Parameters" in profile:
+                column_params = profile["Parameters"]
+            else:
+                continue
+
+            logger.debug(f"column_name: {column_name}")
+            # instantiate column profile class for each column
+            column_profile = DatasetFieldProfileClass(fieldPath=column_name)
+
+            if self.source_config.profiling.unique_count in column_params:
+                column_profile.uniqueCount = int(
+                    float(column_params[self.source_config.profiling.unique_count])
+                )
+            if self.source_config.profiling.unique_proportion in column_params:
+                column_profile.uniqueProportion = float(
+                    column_params[self.source_config.profiling.unique_proportion]
+                )
+            if self.source_config.profiling.null_count in column_params:
+                column_profile.nullCount = int(
+                    float(column_params[self.source_config.profiling.null_count])
+                )
+            if self.source_config.profiling.null_proportion in column_params:
+                column_profile.nullProportion = float(
+                    column_params[self.source_config.profiling.null_proportion]
+                )
+            if self.source_config.profiling.min in column_params:
+                column_profile.min = column_params[self.source_config.profiling.min]
+            if self.source_config.profiling.max in column_params:
+                column_profile.max = column_params[self.source_config.profiling.max]
+            if self.source_config.profiling.mean in column_params:
+                column_profile.mean = column_params[self.source_config.profiling.mean]
+            if self.source_config.profiling.median in column_params:
+                column_profile.median = column_params[
+                    self.source_config.profiling.median
+                ]
+            if self.source_config.profiling.stdev in column_params:
+                column_profile.stdev = column_params[self.source_config.profiling.stdev]
+
+            dataset_profile.fieldProfiles.append(column_profile)
+
+        if partition_spec:
+            # inject partition level stats
+            dataset_profile.partitionSpec = PartitionSpecClass(
+                partition=partition_spec,
+                type=PartitionTypeClass.PARTITION,
+            )
+
+        mcp = MetadataChangeProposalWrapper(
+            entityType="dataset",
+            entityUrn=mce.proposedSnapshot.urn,
+            changeType=ChangeTypeClass.UPSERT,
+            aspectName="datasetProfile",
+            aspect=dataset_profile,
+        )
+        return mcp
+
+    def get_profile_if_enabled(
+        self, mce: MetadataChangeEventClass, database_name: str, table_name: str
+    ) -> List[MetadataChangeProposalWrapper]:
+        if self.source_config.profiling:
+            # for cross-account ingestion
+            kwargs = dict(
+                DatabaseName=database_name,
+                Name=table_name,
+                CatalogId=self.source_config.catalog_id,
+            )
+            response = self.glue_client.get_table(
+                **{k: v for k, v in kwargs.items() if v}
+            )
+
+            partition_keys = response["Table"]["PartitionKeys"]
+
+            # check if this table is partitioned
+            if partition_keys:
+                # ingest data profile with partitions
+                # for cross-account ingestion
+                kwargs = dict(
+                    DatabaseName=database_name,
+                    TableName=table_name,
+                    CatalogId=self.source_config.catalog_id,
+                )
+                response = self.glue_client.get_partitions(
+                    **{k: v for k, v in kwargs.items() if v}
+                )
+
+                partitions = response["Partitions"]
+                partition_keys = [k["Name"] for k in partition_keys]
+
+                mcps = []
+                for p in partitions:
+                    table_stats = p["Parameters"]
+                    column_stats = p["StorageDescriptor"]["Columns"]
+
+                    # only support single partition key
+                    partition_spec = str({partition_keys[0]: p["Values"][0]})
+
+                    if self.source_config.profiling.partition_patterns.allowed(
+                        partition_spec
+                    ):
+                        mcps.append(
+                            self._create_profile_mcp(
+                                mce, table_stats, column_stats, partition_spec
+                            )
+                        )
+                    else:
+                        continue
+                return mcps
+            else:
+                # ingest data profile without partition
+                table_stats = response["Table"]["Parameters"]
+                column_stats = response["Table"]["StorageDescriptor"]["Columns"]
+                return [self._create_profile_mcp(mce, table_stats, column_stats)]
+
+        return []
+
+    def gen_database_key(self, database: str) -> DatabaseKey:
+        return DatabaseKey(
+            database=database,
+            platform=self.platform,
+            instance=self.source_config.platform_instance
+            # keeps backward compatibility when platform instance is missed
+            if self.source_config.platform_instance is not None
+            else self.source_config.env,
+        )
+
+    def gen_database_containers(self, database: str) -> Iterable[MetadataWorkUnit]:
+        domain_urn = self._gen_domain_urn(database)
+        database_container_key = self.gen_database_key(database)
+        container_workunits = gen_containers(
+            container_key=database_container_key,
+            name=database,
+            sub_types=["Database"],
+            domain_urn=domain_urn,
+        )
+
+        for wu in container_workunits:
+            self.report.report_workunit(wu)
+            yield wu
+
+    def add_table_to_database_container(
+        self, dataset_urn: str, db_name: str
+    ) -> Iterable[MetadataWorkUnit]:
+        database_container_key = self.gen_database_key(db_name)
+        container_workunits = add_dataset_to_container(
+            container_key=database_container_key,
+            dataset_urn=dataset_urn,
+        )
+        for wu in container_workunits:
+            self.report.report_workunit(wu)
+            yield wu
+
+    def _gen_domain_urn(self, dataset_name: str) -> Optional[str]:
+        for domain, pattern in self.source_config.domain.items():
+            if pattern.allowed(dataset_name):
+                return make_domain_urn(domain)
+
+        return None
+
+    def _get_domain_wu(
+        self, dataset_name: str, entity_urn: str, entity_type: str
+    ) -> Iterable[MetadataWorkUnit]:
+
+        domain_urn = self._gen_domain_urn(dataset_name)
+        if domain_urn:
+            wus = add_domain_to_entity_wu(
+                entity_type=entity_type,
+                entity_urn=entity_urn,
+                domain_urn=domain_urn,
+            )
+            for wu in wus:
+                self.report.report_workunit(wu)
+                yield wu
+
+    def get_workunits(self) -> Iterable[MetadataWorkUnit]:
+        database_seen = set()
         tables = self.get_all_tables()
 
         for table in tables:
@@ -465,77 +914,108 @@ class GlueSource(Source):
             ) or not self.source_config.table_pattern.allowed(full_table_name):
                 self.report.report_table_dropped(full_table_name)
                 continue
+            if database_name not in database_seen:
+                database_seen.add(database_name)
+                yield from self.gen_database_containers(database_name)
 
             mce = self._extract_record(table, full_table_name)
             workunit = MetadataWorkUnit(full_table_name, mce=mce)
             self.report.report_workunit(workunit)
             yield workunit
 
-        if self.extract_transforms:
-
-            dags = {}
-            flow_names: Dict[str, str] = {}
-
-            for job in self.get_all_jobs():
-
-                flow_urn = mce_builder.make_data_flow_urn(
-                    self.get_underlying_platform(), job["Name"], self.env
+            dataset_urn: str = make_dataset_urn_with_platform_instance(
+                platform=self.platform,
+                name=full_table_name,
+                env=self.env,
+                platform_instance=self.source_config.platform_instance,
+            )
+            yield from self._get_domain_wu(
+                dataset_name=full_table_name,
+                entity_urn=dataset_urn,
+                entity_type="dataset",
+            )
+            yield from self.add_table_to_database_container(
+                dataset_urn=dataset_urn, db_name=database_name
+            )
+            mcp = self.get_lineage_if_enabled(mce)
+            if mcp:
+                mcp_wu = MetadataWorkUnit(
+                    id=f"{full_table_name}-upstreamLineage", mcp=mcp
                 )
+                self.report.report_workunit(mcp_wu)
+                yield mcp_wu
 
-                flow_wu = self.get_dataflow_wu(flow_urn, job)
-                self.report.report_workunit(flow_wu)
-                yield flow_wu
+            mcps_profiling = self.get_profile_if_enabled(mce, database_name, table_name)
+            if mcps_profiling:
+                for mcp_index, mcp in enumerate(mcps_profiling):
+                    mcp_wu = MetadataWorkUnit(
+                        id=f"profile-{full_table_name}-partition-{mcp_index}",
+                        mcp=mcps_profiling[mcp_index],
+                    )
+                    self.report.report_workunit(mcp_wu)
+                    yield mcp_wu
 
-                job_script_location = job.get("Command", {}).get("ScriptLocation")
+        if self.extract_transforms:
+            yield from self._transform_extraction()
 
-                dag: Optional[Dict[str, Any]] = None
+    def _transform_extraction(self) -> Iterable[MetadataWorkUnit]:
+        dags: Dict[str, Optional[Dict[str, Any]]] = {}
+        flow_names: Dict[str, str] = {}
+        for job in self.get_all_jobs():
 
-                if job_script_location is not None:
-
-                    dag = self.get_dataflow_graph(job_script_location)
-
-                dags[flow_urn] = dag
-                flow_names[flow_urn] = job["Name"]
-
-            # run a first pass to pick up s3 bucket names and formats
-            # in Glue, it's possible for two buckets to have files of different extensions
-            # if this happens, we append the extension in the URN so the sources can be distinguished
-            # see process_dataflow_node() for details
-
-            s3_formats: typing.DefaultDict[str, Set[Union[str, None]]] = defaultdict(
-                lambda: set()
+            flow_urn = mce_builder.make_data_flow_urn(
+                self.platform, job["Name"], self.env
             )
 
-            for dag in dags.values():
-                if dag is not None:
-                    for s3_name, extension in self.get_dataflow_s3_names(dag):
-                        s3_formats[s3_name].add(extension)
+            flow_wu = self.get_dataflow_wu(flow_urn, job)
+            self.report.report_workunit(flow_wu)
+            yield flow_wu
 
-            # run second pass to generate node workunits
-            for flow_urn, dag in dags.items():
+            job_script_location = job.get("Command", {}).get("ScriptLocation")
 
-                if dag is None:
-                    continue
+            dag: Optional[Dict[str, Any]] = None
 
-                nodes, new_dataset_ids, new_dataset_mces = self.process_dataflow_graph(
-                    dag, flow_urn, s3_formats
-                )
+            if job_script_location is not None:
+                dag = self.get_dataflow_graph(job_script_location)
 
-                for node in nodes.values():
+            dags[flow_urn] = dag
+            flow_names[flow_urn] = job["Name"]
+        # run a first pass to pick up s3 bucket names and formats
+        # in Glue, it's possible for two buckets to have files of different extensions
+        # if this happens, we append the extension in the URN so the sources can be distinguished
+        # see process_dataflow_node() for details
+        s3_formats: typing.DefaultDict[str, Set[Optional[str]]] = defaultdict(
+            lambda: set()
+        )
+        for dag in dags.values():
+            if dag is not None:
+                for s3_name, extension in self.get_dataflow_s3_names(dag):
+                    s3_formats[s3_name].add(extension)
+        # run second pass to generate node workunits
+        for flow_urn, dag in dags.items():
 
-                    if node["NodeType"] not in ["DataSource", "DataSink"]:
-                        job_wu = self.get_datajob_wu(node, flow_names[flow_urn])
-                        self.report.report_workunit(job_wu)
-                        yield job_wu
+            if dag is None:
+                continue
 
-                for dataset_id, dataset_mce in zip(new_dataset_ids, new_dataset_mces):
+            nodes, new_dataset_ids, new_dataset_mces = self.process_dataflow_graph(
+                dag, flow_urn, s3_formats
+            )
 
-                    dataset_wu = MetadataWorkUnit(id=dataset_id, mce=dataset_mce)
-                    self.report.report_workunit(dataset_wu)
-                    yield dataset_wu
+            for node in nodes.values():
 
+                if node["NodeType"] not in ["DataSource", "DataSink"]:
+                    job_wu = self.get_datajob_wu(node, flow_names[flow_urn])
+                    self.report.report_workunit(job_wu)
+                    yield job_wu
+
+            for dataset_id, dataset_mce in zip(new_dataset_ids, new_dataset_mces):
+                dataset_wu = MetadataWorkUnit(id=dataset_id, mce=dataset_mce)
+                self.report.report_workunit(dataset_wu)
+                yield dataset_wu
+
+    # flake8: noqa: C901
     def _extract_record(self, table: Dict, table_name: str) -> MetadataChangeEvent:
-        def get_owner() -> OwnershipClass:
+        def get_owner() -> Optional[OwnershipClass]:
             owner = table.get("Owner")
             if owner:
                 owners = [
@@ -544,11 +1024,10 @@ class GlueSource(Source):
                         type=OwnershipTypeClass.DATAOWNER,
                     )
                 ]
-            else:
-                owners = []
-            return OwnershipClass(
-                owners=owners,
-            )
+                return OwnershipClass(
+                    owners=owners,
+                )
+            return None
 
         def get_dataset_properties() -> DatasetPropertiesClass:
             return DatasetPropertiesClass(
@@ -565,56 +1044,140 @@ class GlueSource(Source):
                 tags=[],
             )
 
+        def get_s3_tags() -> Optional[GlobalTagsClass]:
+            bucket_name = s3_util.get_bucket_name(
+                table["StorageDescriptor"]["Location"]
+            )
+            tags_to_add = []
+            if self.source_config.use_s3_bucket_tags:
+                try:
+                    bucket_tags = self.s3_client.get_bucket_tagging(Bucket=bucket_name)
+                    tags_to_add.extend(
+                        [
+                            make_tag_urn(f"""{tag["Key"]}:{tag["Value"]}""")
+                            for tag in bucket_tags["TagSet"]
+                        ]
+                    )
+                except self.s3_client.exceptions.ClientError:
+                    logger.warn(f"No tags found for bucket={bucket_name}")
+            if self.source_config.use_s3_object_tags:
+                key_prefix = s3_util.get_key_prefix(
+                    table["StorageDescriptor"]["Location"]
+                )
+                object_tagging = self.s3_client.get_object_tagging(
+                    Bucket=bucket_name, Key=key_prefix
+                )
+                tag_set = object_tagging["TagSet"]
+                if tag_set:
+                    tags_to_add.extend(
+                        [
+                            make_tag_urn(f"""{tag["Key"]}:{tag["Value"]}""")
+                            for tag in tag_set
+                        ]
+                    )
+                else:
+                    # Unlike bucket tags, if an object does not have tags, it will just return an empty array
+                    # as opposed to an exception.
+                    logger.warn(
+                        f"No tags found for bucket={bucket_name} key={key_prefix}"
+                    )
+            if len(tags_to_add) == 0:
+                return None
+            if self.ctx.graph is not None:
+                logger.debug(
+                    "Connected to DatahubApi, grabbing current tags to maintain."
+                )
+                current_tags: Optional[GlobalTagsClass] = self.ctx.graph.get_aspect_v2(
+                    entity_urn=dataset_urn,
+                    aspect="globalTags",
+                    aspect_type=GlobalTagsClass,
+                )
+                if current_tags:
+                    tags_to_add.extend(
+                        [current_tag.tag for current_tag in current_tags.tags]
+                    )
+            else:
+                logger.warn(
+                    "Could not connect to DatahubApi. No current tags to maintain"
+                )
+
+            # Remove duplicate tags
+            tags_to_add = list(set(tags_to_add))
+            new_tags = GlobalTagsClass(
+                tags=[TagAssociationClass(tag_to_add) for tag_to_add in tags_to_add]
+            )
+            return new_tags
+
         def get_schema_metadata(glue_source: GlueSource) -> SchemaMetadata:
             schema = table["StorageDescriptor"]["Columns"]
             fields: List[SchemaField] = []
             for field in schema:
-                schema_field = SchemaField(
-                    fieldPath=field["Name"],
-                    nativeDataType=field["Type"],
-                    type=get_column_type(
-                        glue_source, field["Type"], table_name, field["Name"]
-                    ),
+                schema_fields = get_schema_fields_for_hive_column(
+                    hive_column_name=field["Name"],
+                    hive_column_type=field["Type"],
                     description=field.get("Comment"),
-                    recursive=False,
-                    nullable=True,
+                    default_nullable=True,
                 )
-                fields.append(schema_field)
+                assert schema_fields
+                fields.extend(schema_fields)
 
             partition_keys = table.get("PartitionKeys", [])
             for partition_key in partition_keys:
-                schema_field = SchemaField(
-                    fieldPath=partition_key["Name"],
-                    nativeDataType=partition_key["Type"],
-                    type=get_column_type(
-                        glue_source,
-                        partition_key["Type"],
-                        table_name,
-                        partition_key["Name"],
-                    ),
-                    recursive=False,
-                    nullable=False,
+                schema_fields = get_schema_fields_for_hive_column(
+                    hive_column_name=partition_key["Name"],
+                    hive_column_type=partition_key["Type"],
+                    default_nullable=False,
                 )
-                fields.append(schema_field)
+                assert schema_fields
+                fields.extend(schema_fields)
 
             return SchemaMetadata(
                 schemaName=table_name,
                 version=0,
                 fields=fields,
-                platform=f"urn:li:dataPlatform:{self.get_underlying_platform()}",
+                platform=f"urn:li:dataPlatform:{self.platform}",
                 hash="",
                 platformSchema=MySqlDDL(tableSchema=""),
             )
 
+        def get_data_platform_instance() -> DataPlatformInstanceClass:
+            return DataPlatformInstanceClass(
+                platform=make_data_platform_urn(self.platform),
+                instance=make_dataplatform_instance_urn(
+                    self.platform, self.source_config.platform_instance
+                )
+                if self.source_config.platform_instance
+                else None,
+            )
+
+        dataset_urn = make_dataset_urn_with_platform_instance(
+            platform=self.platform,
+            name=table_name,
+            env=self.env,
+            platform_instance=self.source_config.platform_instance,
+        )
         dataset_snapshot = DatasetSnapshot(
-            urn=f"urn:li:dataset:(urn:li:dataPlatform:{self.get_underlying_platform()},{table_name},{self.env})",
+            urn=dataset_urn,
             aspects=[],
         )
 
         dataset_snapshot.aspects.append(Status(removed=False))
-        dataset_snapshot.aspects.append(get_owner())
+
+        if self.extract_owners:
+            optional_owner_aspect = get_owner()
+            if optional_owner_aspect is not None:
+                dataset_snapshot.aspects.append(optional_owner_aspect)
+
         dataset_snapshot.aspects.append(get_dataset_properties())
         dataset_snapshot.aspects.append(get_schema_metadata(self))
+        dataset_snapshot.aspects.append(get_data_platform_instance())
+        if (
+            self.source_config.use_s3_bucket_tags
+            or self.source_config.use_s3_object_tags
+        ):
+            s3_tags = get_s3_tags()
+            if s3_tags is not None:
+                dataset_snapshot.aspects.append(s3_tags)
 
         metadata_record = MetadataChangeEvent(proposedSnapshot=dataset_snapshot)
         return metadata_record
@@ -624,60 +1187,3 @@ class GlueSource(Source):
 
     def close(self):
         pass
-
-
-def get_column_type(
-    glue_source: GlueSource, field_type: str, table_name: str, field_name: str
-) -> SchemaFieldDataType:
-    field_type_mapping = {
-        "array": ArrayTypeClass,
-        "bigint": NumberTypeClass,
-        "binary": BytesTypeClass,
-        "boolean": BooleanTypeClass,
-        "char": StringTypeClass,
-        "date": DateTypeClass,
-        "decimal": NumberTypeClass,
-        "double": NumberTypeClass,
-        "float": NumberTypeClass,
-        "int": NumberTypeClass,
-        "integer": NumberTypeClass,
-        "interval": TimeTypeClass,
-        "long": NumberTypeClass,
-        "map": MapTypeClass,
-        "null": NullTypeClass,
-        "set": ArrayTypeClass,
-        "smallint": NumberTypeClass,
-        "string": StringTypeClass,
-        "struct": MapTypeClass,
-        "timestamp": TimeTypeClass,
-        "tinyint": NumberTypeClass,
-        "union": UnionTypeClass,
-        "varchar": StringTypeClass,
-    }
-
-    field_starts_type_mapping = {
-        "array": ArrayTypeClass,
-        "set": ArrayTypeClass,
-        "map": MapTypeClass,
-        "struct": MapTypeClass,
-        "varchar": StringTypeClass,
-        "decimal": NumberTypeClass,
-    }
-
-    type_class = None
-    if field_type in field_type_mapping:
-        type_class = field_type_mapping[field_type]
-    else:
-        for key in field_starts_type_mapping:
-            if field_type.startswith(key):
-                type_class = field_starts_type_mapping[key]
-                break
-
-    if type_class is None:
-        glue_source.report.report_warning(
-            field_type,
-            f"The type '{field_type}' is not recognised for field '{field_name}' in table '{table_name}', setting as StringTypeClass.",
-        )
-        type_class = StringTypeClass
-    data_type = SchemaFieldDataType(type=type_class())
-    return data_type

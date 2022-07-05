@@ -1,8 +1,9 @@
 import re
 from abc import ABC, abstractmethod
-from typing import IO, Any, Dict, List, Optional, Pattern
+from typing import IO, Any, Dict, List, Optional, Pattern, cast
 
 from pydantic import BaseModel
+from pydantic.fields import Field
 
 
 class ConfigModel(BaseModel):
@@ -11,10 +12,15 @@ class ConfigModel(BaseModel):
 
 
 class DynamicTypedConfig(ConfigModel):
-    type: str
+    type: str = Field(
+        description="The type of the dynamic object",
+    )
     # This config type is declared Optional[Any] here. The eventual parser for the
     # specified type is responsible for further validation.
-    config: Optional[Any]
+    config: Optional[Any] = Field(
+        default=None,
+        description="The configuration required for initializing the state provider. Default: The datahub_api config if set at pipeline level. Otherwise, the default DatahubClientConfig. See the defaults (https://github.com/datahub-project/datahub/blob/master/metadata-ingestion/src/datahub/ingestion/graph/client.py#L19).",
+    )
 
 
 class MetaError(Exception):
@@ -43,21 +49,78 @@ class ConfigurationError(MetaError):
     """A configuration error has happened"""
 
 
+class SensitiveError(Exception):
+    """Wraps an exception that should not be logged with variable information."""
+
+    @classmethod
+    def get_sensitive_cause(cls, exc: Exception) -> Optional[Exception]:
+        """
+        Returns the underlying exception if the exception is sensitive, and None otherwise.
+        """
+
+        e: Optional[Exception] = exc
+        while e:
+            # This cast converts BaseException to Exception.
+            inner = cast(Optional[Exception], e.__cause__)
+
+            if isinstance(e, cls):
+                return inner
+            e = inner
+        return None
+
+
 class ConfigurationMechanism(ABC):
     @abstractmethod
     def load_config(self, config_fp: IO) -> dict:
         pass
 
 
+class OauthConfiguration(ConfigModel):
+    provider: Optional[str] = Field(
+        description="Identity provider for oauth, e.g- microsoft"
+    )
+    client_id: Optional[str] = Field(
+        description="client id of your registered application"
+    )
+    scopes: Optional[List[str]] = Field(
+        description="scopes required to connect to snowflake"
+    )
+    use_certificate: Optional[str] = Field(
+        description="Do you want to use certificate and private key to authenticate using oauth",
+        default=False,
+    )
+    client_secret: Optional[str] = Field(
+        description="client secret of the application if use_certificate = false"
+    )
+    authority_url: Optional[str] = Field(
+        description="Authority url of your identity provider"
+    )
+    encoded_oauth_public_key: Optional[str] = Field(
+        description="base64 encoded certificate content if use_certificate = true"
+    )
+    encoded_oauth_private_key: Optional[str] = Field(
+        description="base64 encoded private key content if use_certificate = true"
+    )
+
+
 class AllowDenyPattern(ConfigModel):
     """A class to store allow deny regexes"""
 
-    allow: List[str] = [".*"]
-    deny: List[str] = []
-    ignoreCase: Optional[
-        bool
-    ] = True  # Name comparisons should default to ignoring case
-    alphabet: str = "[A-Za-z0-9 _.-]"
+    allow: List[str] = Field(
+        default=[".*"],
+        description="List of regex patterns for process groups to include in ingestion",
+    )
+    deny: List[str] = Field(
+        default=[],
+        description="List of regex patterns for process groups to exclude from ingestion.",
+    )
+    ignoreCase: Optional[bool] = Field(
+        default=True,
+        description="Whether to ignore case sensitivity during pattern matching.",
+    )  # Name comparisons should default to ignoring case
+    alphabet: str = Field(
+        default="[A-Za-z0-9 _.-]", description="Allowed alphabets pattern"
+    )
 
     @property
     def alphabet_pattern(self) -> Pattern:
@@ -145,3 +208,7 @@ class KeyValuePattern(ConfigModel):
         """Return the list of allowed strings as a list, after taking into account deny patterns, if possible"""
         assert self.is_fully_specified_key()
         return self.rules
+
+
+class VersionedConfig(ConfigModel):
+    version: str = "1"

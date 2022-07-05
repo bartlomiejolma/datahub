@@ -11,7 +11,7 @@ export function getDataForEntityType<T>({
     getOverrideProperties,
 }: {
     data: T;
-    entityType: EntityType;
+    entityType?: EntityType;
     getOverrideProperties: (T) => GenericEntityProperties;
 }): GenericEntityProperties | null {
     if (!entityData) {
@@ -27,6 +27,28 @@ export function getDataForEntityType<T>({
             customProperties,
         };
     }
+    if (anyEntityData.tags) {
+        modifiedEntityData = {
+            ...modifiedEntityData,
+            globalTags: anyEntityData.tags,
+        };
+    }
+
+    if (anyEntityData?.siblings?.siblings?.length > 0) {
+        const genericSiblingProperties: GenericEntityProperties[] = anyEntityData?.siblings?.siblings?.map((sibling) =>
+            getDataForEntityType({ data: sibling, getOverrideProperties: () => ({}) }),
+        );
+
+        const allPlatforms = anyEntityData.siblings.isPrimary
+            ? [anyEntityData.platform, genericSiblingProperties?.[0]?.platform]
+            : [genericSiblingProperties?.[0]?.platform, anyEntityData.platform];
+
+        modifiedEntityData = {
+            ...modifiedEntityData,
+            siblingPlatforms: allPlatforms,
+        };
+    }
+
     return {
         ...modifiedEntityData,
         ...getOverrideProperties(entityData),

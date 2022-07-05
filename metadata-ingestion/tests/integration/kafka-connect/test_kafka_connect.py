@@ -2,19 +2,17 @@ import time
 
 import pytest
 import requests
-from click.testing import CliRunner
 from freezegun import freeze_time
 
-from datahub.entrypoints import datahub
-from tests.test_helpers import fs_helpers, mce_helpers
-from tests.test_helpers.click_helpers import assert_result_ok
+from tests.test_helpers import mce_helpers
+from tests.test_helpers.click_helpers import run_datahub_cmd
 from tests.test_helpers.docker_helpers import wait_for_port
 
 FROZEN_TIME = "2021-10-25 13:00:00"
 
 
 @freeze_time(FROZEN_TIME)
-@pytest.mark.integration
+@pytest.mark.integration_batch_1
 def test_kafka_connect_ingest(docker_compose_runner, pytestconfig, tmp_path, mock_time):
     test_resources_dir = pytestconfig.rootpath / "tests/integration/kafka-connect"
     test_resources_dir_kafka = pytestconfig.rootpath / "tests/integration/kafka"
@@ -180,17 +178,30 @@ def test_kafka_connect_ingest(docker_compose_runner, pytestconfig, tmp_path, moc
         )
         assert r.status_code == 201  # Created
 
+        # Creating Postgresql source
+        r = requests.post(
+            "http://localhost:58083/connectors",
+            headers={"Content-Type": "application/json"},
+            data="""{
+                    "name": "postgres_source",
+                    "config": {
+                        "connector.class": "io.confluent.connect.jdbc.JdbcSourceConnector",
+                        "mode": "incrementing",
+                        "incrementing.column.name": "id",
+                        "table.whitelist": "member",
+                        "topic.prefix": "test-postgres-jdbc-",
+                        "tasks.max": "1",
+                        "connection.url": "${env:POSTGRES_CONNECTION_URL}"
+                    }
+                }""",
+        )
+        assert r.status_code == 201  # Created
         # Give time for connectors to process the table data
-        time.sleep(45)
+        time.sleep(60)
 
         # Run the metadata ingestion pipeline.
-        runner = CliRunner()
-        with fs_helpers.isolated_filesystem(tmp_path):
-            print(tmp_path)
-            config_file = (test_resources_dir / "kafka_connect_to_file.yml").resolve()
-            result = runner.invoke(datahub, ["ingest", "-c", f"{config_file}"])
-            # import pdb;pdb.set_trace();
-            assert_result_ok(result)
+        config_file = (test_resources_dir / "kafka_connect_to_file.yml").resolve()
+        run_datahub_cmd(["ingest", "-c", f"{config_file}"], tmp_path=tmp_path)
 
         # Verify the output.
         mce_helpers.check_golden_file(

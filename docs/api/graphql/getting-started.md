@@ -24,11 +24,11 @@ Today, DataHub's GraphQL endpoint is available for use in multiple places. The o
 
 1. **Metadata Service**: The DataHub Metadata Service (backend) is the source-of-truth for the GraphQL endpoint. The endpoint is located at `/api/graphql` path of the DNS address
 where your instance of the `datahub-gms` container is deployed. For example, in local deployments it is typically located at `http://localhost:8080/api/graphql`. By default,
-the Metadata Service has no explicit authentication checks. However, it does have *Authorization checks*. DataHub [Access Policies](../../../docs/policies.md) will be enforced by the GraphQL API. This means you'll need to provide an actor identity when querying the GraphQL API. 
+the Metadata Service has no explicit authentication checks. However, it does have *Authorization checks*. DataHub [Access Policies](../../authorization/policies.md) will be enforced by the GraphQL API. This means you'll need to provide an actor identity when querying the GraphQL API. 
 To do so, include the `X-DataHub-Actor` header with an Authorized Corp User URN as the value in your request. Because anyone is able to set the value of this header, we recommend using this endpoint only in trusted environments, either by administrators themselves or programs that they own directly. 
    
 2. **Frontend Proxy**: The DataHub Frontend Proxy Service (frontend) is a basic web server & reverse proxy to the Metadata Service. As such, the 
-GraphQL endpoint is also available for query wherever the Frontend Proxy is deployed. In local deployments, this is typically `http://localhost:9002/api/graphql`. By default,
+GraphQL endpoint is also available for query wherever the Frontend Proxy is deployed. In local deployments, this is typically `http://localhost:9002/api/v2/graphql`. By default,
 the Frontend Proxy *does* have Session Cookie-based Authentication via the PLAY_SESSION cookie set at DataHub UI login time. This means
 that if a request does not have a valid PLAY_SESSION cookie obtained via logging into the DataHub UI, the request will be rejected. To use this API in an untrusted environment,
 you'd need to a) log into DataHub, b) extract the PLAY_SESSION cookie that is set on login, and c) provide this Cookie in your HTTP headers when
@@ -70,7 +70,7 @@ The same auth restrictions described in the section above apply to these endpoin
 
 Once you've gotten the API deployed and responding, proceed to [Querying Entities](./querying-entities.md) to learn how to read and write the Entities
 on your Metadata Graph.
-
+If you're interested in administrative actions considering have a look at [Token Management](./token-management.md) to learn how to generate, list & revoke access tokens for programmatic use in DataHub.
 
 ## Feedback, Feature Requests, & Support
 

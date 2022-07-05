@@ -2,6 +2,75 @@
 
 A list of previous Town Halls, their planned schedule, and the recording of the meeting.
 
+## 5/26/2022
+[Full YouTube video](https://youtu.be/taKb_zyowEE)
+
+## Agenda
+
+- Community Case Study: Hear how the G-Research team is using Cassandra as DataHub’s Backend
+- Creating & Editing Glossary Terms from the DataHub UI
+- DataHub User Onboarding via the UI
+- DataHub 201: Impact Analysis
+- Sneak Peek: Data Reliability with DataHub
+- Metadata Day Hackathon Winners
+
+## 4/28/2022
+[Full YouTube video](https://www.youtube.com/watch?v=7iwNxHgqxtg)
+
+## Agenda
+- Community Case Study: Hear from Included Health about how they are embedding external tools into the DataHub UI
+- New! Actions Framework: run custom code when changes happen within DataHub
+- UI Refresh for ML Entities
+- Improved deletion support for time-series aspects, tags, terms, & more
+- OpenAPI Improvements
+
+## 3/31/2022
+[Full YouTube video](https://www.youtube.com/watch?v=IVazVgcNRdw)
+
+## Agenda
+- Community Case Study: Hear from Zendesk about how they are applying “shift left” principles by authoring metadata in their Protobuf schemas
+- RBAC Functionality: View-Based Policies
+- Schema Version History - surfacing the history of schema changes in DataHub's UI
+- Improvements to Airflow Ingestion, including Run History
+- Container/Domain-Level  Property Inheritance
+- Delete API
+
+
+## 2/25/2022
+[Full YouTube video](https://www.youtube.com/watch?v=enBqB2Dbuv4)
+
+## Agenda
+
+- Lineage Impact Analysis - using DataHub to understand the impact of changes on downstream dependencies
+- Displaying Data Quality Checks in the UI
+- Roadmap update: Schema Version History & Column-Level Lineage
+- Community Case Study: Managing Lineage via YAML
+
+## 1/28/2022
+[Full YouTube video](https://youtu.be/ShlSR3dMUnE)
+
+## Agenda
+
+- Community & Roadmap Updates by Maggie Hays (Acryl Data)
+- Project Updates by Shirshanka Das  (Acryl Data)
+- Community Case Study: Adding Dataset Transformers by Eric Cooklin (Stash)
+- Demo: Data Domains & Containers by John Joyce (Acryl Data)
+- DataHub Basics — Data Profiling & Usage Stats 101 by Maggie Hays & Tamás Németh (Acryl Data)
+- Demo: Spark Lineage by Mugdha Hardikar (GS Lab) & Shirshanka Das
+
+## 12/17/2021
+[Full YouTube video](https://youtu.be/rYInKCwxu7o)
+
+## Agenda
+- Community & Roadmap Updates by Maggie Hays (Acryl Data)
+- Project Updates by Shirshanka Das (Acryl Data)
+- 2021 DataHub Community in Review by Maggie Hays
+- DataHub Basics -- Users, Groups, & Authentication 101 by Pedro Silva (Acryl Data)
+- Sneak Peek: UI-Based Ingestion by John Joyce (Acryl Data)
+- Case Study — DataHub at Grofers by Shubham Gupta
+- Top DataHub Contributors of 2021 - Maggie Hays
+- Final Surprise! We Interviewed a 10yo and a 70yo about DataHub
+
 ## 11/19/2021
 [Full YouTube video](https://youtu.be/to80sEDZz7k)
 

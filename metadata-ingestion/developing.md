@@ -19,7 +19,10 @@ The architecture of this metadata ingestion framework is heavily inspired by [Ap
 
 ### Set up your Python environment
 
+From the repository root: 
+
 ```shell
+cd metadata-ingestion
 ../gradlew :metadata-ingestion:installDev
 source venv/bin/activate
 datahub version  # should print "version: unavailable (installed via git)"
@@ -97,10 +100,13 @@ pip install -e '.[dev]'
 pip install -e '.[integration-tests]'
 
 # Run unit tests.
-pytest -m 'not integration'
+pytest -m 'not integration and not slow_integration'
 
 # Run Docker-based integration tests.
 pytest -m 'integration'
+
+# Run Docker-based slow integration tests.
+pytest -m 'slow_integration'
 ```
 
 ### Sanity check code before committing
@@ -120,7 +126,7 @@ flake8 src/ tests/
 mypy src/ tests/
 
 # If you want to run only the quicker subtests
-pytest -m 'not integration' -vv
+pytest -m 'not integration and not slow_integration' -vv
 # Run the full testing suite
 pytest -vv
 
@@ -134,4 +140,18 @@ pytest -vv
 ../gradlew :metadata-ingestion:testSingle -PtestFile=tests/unit/test_airflow.py
 # Run all tests under tests/unit
 ../gradlew :metadata-ingestion:testSingle -PtestFile=tests/unit
+```
+
+### Updating golden test files
+
+If you made some changes that require generating new "golden" data files for use in testing a specific ingestion source, you can run the following to re-generate them:
+
+```shell
+pytest tests/integration/<source>/<source>.py --update-golden-files
+```
+
+For example,
+
+```shell
+pytest tests/integration/dbt/test_dbt.py --update-golden-files
 ```

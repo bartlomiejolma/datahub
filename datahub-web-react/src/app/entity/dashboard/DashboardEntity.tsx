@@ -5,9 +5,7 @@ import {
     useGetDashboardQuery,
     useUpdateDashboardMutation,
 } from '../../../graphql/dashboard.generated';
-import { Dashboard, EntityType, PlatformType, SearchResult } from '../../../types.generated';
-import { EntityAndType } from '../../lineage/types';
-import { getLogoFromPlatform } from '../../shared/getLogoFromPlatform';
+import { Dashboard, EntityType, OwnershipType, SearchResult } from '../../../types.generated';
 import { Entity, IconStyleType, PreviewType } from '../Entity';
 import { EntityProfile } from '../shared/containers/profile/EntityProfile';
 import { SidebarOwnerSection } from '../shared/containers/profile/sidebar/Ownership/SidebarOwnerSection';
@@ -19,7 +17,8 @@ import { PropertiesTab } from '../shared/tabs/Properties/PropertiesTab';
 import { GenericEntityProperties } from '../shared/types';
 import { DashboardPreview } from './preview/DashboardPreview';
 import { getDataForEntityType } from '../shared/containers/profile/utils';
-import { capitalizeFirstLetter } from '../../shared/capitalizeFirstLetter';
+import { SidebarDomainSection } from '../shared/containers/profile/sidebar/Domain/SidebarDomainSection';
+import { EntityMenuItems } from '../shared/EntityDropdown/EntityDropdown';
 
 /**
  * Definition of the DataHub Dashboard entity.
@@ -73,6 +72,7 @@ export class DashboardEntity implements Entity<Dashboard> {
             useEntityQuery={useGetDashboardQuery}
             useUpdateQuery={useUpdateDashboardMutation}
             getOverrideProperties={this.getOverridePropertiesFromEntity}
+            headerDropdownItems={new Set([EntityMenuItems.COPY_URL, EntityMenuItems.UPDATE_DEPRECATION])}
             tabs={[
                 {
                     name: 'Documentation',
@@ -104,6 +104,12 @@ export class DashboardEntity implements Entity<Dashboard> {
                 },
                 {
                     component: SidebarOwnerSection,
+                    properties: {
+                        defaultOwnerType: OwnershipType.TechnicalOwner,
+                    },
+                },
+                {
+                    component: SidebarDomainSection,
                 },
             ]}
         />
@@ -111,23 +117,11 @@ export class DashboardEntity implements Entity<Dashboard> {
 
     getOverridePropertiesFromEntity = (dashboard?: Dashboard | null): GenericEntityProperties => {
         // TODO: Get rid of this once we have correctly formed platform coming back.
-        const tool = dashboard?.tool || '';
         const name = dashboard?.properties?.name;
         const externalUrl = dashboard?.properties?.externalUrl;
         return {
             name,
             externalUrl,
-            platform: {
-                urn: `urn:li:dataPlatform:(${tool})`,
-                type: EntityType.DataPlatform,
-                name: tool,
-                info: {
-                    logoUrl: getLogoFromPlatform(tool),
-                    displayName: capitalizeFirstLetter(tool),
-                    type: PlatformType.Others,
-                    datasetNameDelimiter: '.',
-                },
-            },
         };
     };
 
@@ -135,13 +129,16 @@ export class DashboardEntity implements Entity<Dashboard> {
         return (
             <DashboardPreview
                 urn={data.urn}
-                platform={data.tool}
+                platform={data.platform.properties?.displayName || data.platform.name}
                 name={data.properties?.name}
                 description={data.editableProperties?.description || data.properties?.description}
                 access={data.properties?.access}
                 tags={data.globalTags || undefined}
                 owners={data.ownership?.owners}
                 glossaryTerms={data?.glossaryTerms}
+                logoUrl={data?.platform?.properties?.logoUrl}
+                domain={data.domain}
+                container={data.container}
             />
         );
     };
@@ -151,14 +148,19 @@ export class DashboardEntity implements Entity<Dashboard> {
         return (
             <DashboardPreview
                 urn={data.urn}
-                platform={data.tool}
+                platform={data.platform.properties?.displayName || data.platform.name}
                 name={data.properties?.name}
+                platformInstanceId={data.dataPlatformInstance?.instanceId}
                 description={data.editableProperties?.description || data.properties?.description}
                 access={data.properties?.access}
                 tags={data.globalTags || undefined}
                 owners={data.ownership?.owners}
                 glossaryTerms={data?.glossaryTerms}
                 insights={result.insights}
+                logoUrl={data?.platform?.properties?.logoUrl || ''}
+                domain={data.domain}
+                container={data.container}
+                parentContainers={data.parentContainers}
             />
         );
     };
@@ -168,13 +170,8 @@ export class DashboardEntity implements Entity<Dashboard> {
             urn: entity.urn,
             name: entity.properties?.name || '',
             type: EntityType.Dashboard,
-            // eslint-disable-next-line @typescript-eslint/dot-notation
-            upstreamChildren: entity?.['charts']?.relationships?.map(
-                (relationship) => ({ entity: relationship.entity, type: relationship.entity.type } as EntityAndType),
-            ),
-            downstreamChildren: undefined,
-            icon: getLogoFromPlatform(entity.tool),
-            platform: entity.tool,
+            icon: entity?.platform?.properties?.logoUrl || '',
+            platform: entity?.platform.properties?.displayName || entity?.platform.name,
         };
     };
 

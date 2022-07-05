@@ -5,8 +5,11 @@ export enum PageRoutes {
     /**
      * Server-side authentication route
      */
+    ROOT = '/',
     AUTHENTICATE = '/authenticate',
+    SIGN_UP = '/signup',
     LOG_IN = '/login',
+    RESET_CREDENTIALS = '/reset',
     SEARCH_RESULTS = '/search/:type?',
     SEARCH = '/search',
     BROWSE = '/browse',
@@ -16,7 +19,10 @@ export enum PageRoutes {
     ANALYTICS = '/analytics',
     POLICIES = '/policies',
     IDENTITIES = '/identities',
+    INGESTION = '/ingestion',
     SETTINGS = '/settings',
+    DOMAINS = '/domains',
+    GLOSSARY = '/glossary',
 }
 
 /**

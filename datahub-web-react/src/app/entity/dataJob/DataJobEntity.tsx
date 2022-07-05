@@ -1,10 +1,8 @@
 import * as React from 'react';
 import { ConsoleSqlOutlined } from '@ant-design/icons';
-import { DataJob, EntityType, PlatformType, RelationshipDirection, SearchResult } from '../../../types.generated';
+import { DataJob, EntityType, OwnershipType, SearchResult } from '../../../types.generated';
 import { Preview } from './preview/Preview';
 import { Entity, IconStyleType, PreviewType } from '../Entity';
-import { getChildrenFromRelationships } from '../../lineage/utils/getChildren';
-import { getLogoFromPlatform } from '../../shared/getLogoFromPlatform';
 import { EntityProfile } from '../shared/containers/profile/EntityProfile';
 import { GetDataJobQuery, useGetDataJobQuery, useUpdateDataJobMutation } from '../../../graphql/dataJob.generated';
 import { DocumentationTab } from '../shared/tabs/Documentation/DocumentationTab';
@@ -16,7 +14,13 @@ import { SidebarOwnerSection } from '../shared/containers/profile/sidebar/Owners
 import { GenericEntityProperties } from '../shared/types';
 import { DataJobFlowTab } from '../shared/tabs/Entity/DataJobFlowTab';
 import { getDataForEntityType } from '../shared/containers/profile/utils';
-import { capitalizeFirstLetter } from '../../shared/capitalizeFirstLetter';
+import { SidebarDomainSection } from '../shared/containers/profile/sidebar/Domain/SidebarDomainSection';
+import { RunsTab } from './tabs/RunsTab';
+import { EntityMenuItems } from '../shared/EntityDropdown/EntityDropdown';
+
+const getDataJobPlatformName = (data: DataJob): string => {
+    return data.dataFlow?.platform.properties?.displayName || data.dataFlow?.platform.name || '';
+};
 
 /**
  * Definition of the DataHub DataJob entity.
@@ -64,6 +68,7 @@ export class DataJobEntity implements Entity<DataJob> {
             useEntityQuery={useGetDataJobQuery}
             useUpdateQuery={useUpdateDataJobMutation}
             getOverrideProperties={this.getOverridePropertiesFromEntity}
+            headerDropdownItems={new Set([EntityMenuItems.COPY_URL, EntityMenuItems.UPDATE_DEPRECATION])}
             tabs={[
                 {
                     name: 'Documentation',
@@ -87,6 +92,14 @@ export class DataJobEntity implements Entity<DataJob> {
                             (dataJob?.dataJob?.outgoing?.count || 0) !== 0,
                     },
                 },
+                {
+                    name: 'Runs',
+                    component: RunsTab,
+                    display: {
+                        visible: (_, _1) => true,
+                        enabled: (_, dataJob: GetDataJobQuery) => (dataJob?.dataJob?.runs?.total || 0) !== 0,
+                    },
+                },
             ]}
             sidebarSections={[
                 {
@@ -101,6 +114,12 @@ export class DataJobEntity implements Entity<DataJob> {
                 },
                 {
                     component: SidebarOwnerSection,
+                    properties: {
+                        defaultOwnerType: OwnershipType.TechnicalOwner,
+                    },
+                },
+                {
+                    component: SidebarDomainSection,
                 },
             ]}
         />
@@ -108,57 +127,43 @@ export class DataJobEntity implements Entity<DataJob> {
 
     getOverridePropertiesFromEntity = (dataJob?: DataJob | null): GenericEntityProperties => {
         // TODO: Get rid of this once we have correctly formed platform coming back.
-        const tool = dataJob?.dataFlow?.orchestrator || '';
         const name = dataJob?.properties?.name;
         const externalUrl = dataJob?.properties?.externalUrl;
         return {
             name,
             externalUrl,
-            platform: {
-                urn: `urn:li:dataPlatform:(${tool})`,
-                type: EntityType.DataPlatform,
-                name: tool,
-                info: {
-                    logoUrl: getLogoFromPlatform(tool),
-                    displayName: capitalizeFirstLetter(tool),
-                    type: PlatformType.Others,
-                    datasetNameDelimiter: '.',
-                },
-            },
+            platform: dataJob?.dataFlow?.platform,
         };
     };
 
     renderPreview = (_: PreviewType, data: DataJob) => {
-        const platformName = data.dataFlow
-            ? data.dataFlow?.orchestrator.charAt(0).toUpperCase() + data.dataFlow?.orchestrator.slice(1)
-            : '';
         return (
             <Preview
                 urn={data.urn}
                 name={data.properties?.name || ''}
                 description={data.editableProperties?.description || data.properties?.description}
-                platformName={platformName}
-                platformLogo={getLogoFromPlatform(data.dataFlow?.orchestrator || '')}
+                platformName={getDataJobPlatformName(data)}
+                platformLogo={data?.dataFlow?.platform?.properties?.logoUrl || ''}
                 owners={data.ownership?.owners}
                 globalTags={data.globalTags || null}
+                domain={data.domain}
             />
         );
     };
 
     renderSearch = (result: SearchResult) => {
         const data = result.entity as DataJob;
-        const platformName = data.dataFlow
-            ? data.dataFlow?.orchestrator.charAt(0).toUpperCase() + data.dataFlow?.orchestrator.slice(1)
-            : '';
         return (
             <Preview
                 urn={data.urn}
                 name={data.properties?.name || ''}
                 description={data.editableProperties?.description || data.properties?.description}
-                platformName={platformName}
-                platformLogo={getLogoFromPlatform(data.dataFlow?.orchestrator || '')}
+                platformName={getDataJobPlatformName(data)}
+                platformLogo={data?.dataFlow?.platform?.properties?.logoUrl || ''}
+                platformInstanceId={data.dataPlatformInstance?.instanceId}
                 owners={data.ownership?.owners}
                 globalTags={data.globalTags}
+                domain={data.domain}
                 insights={result.insights}
             />
         );
@@ -169,22 +174,8 @@ export class DataJobEntity implements Entity<DataJob> {
             urn: entity?.urn,
             name: entity?.properties?.name || '',
             type: EntityType.DataJob,
-            downstreamChildren: getChildrenFromRelationships({
-                // eslint-disable-next-line @typescript-eslint/dot-notation
-                incomingRelationships: entity?.['incoming'],
-                // eslint-disable-next-line @typescript-eslint/dot-notation
-                outgoingRelationships: entity?.['outgoing'],
-                direction: RelationshipDirection.Incoming,
-            }),
-            upstreamChildren: getChildrenFromRelationships({
-                // eslint-disable-next-line @typescript-eslint/dot-notation
-                incomingRelationships: entity?.['incoming'],
-                // eslint-disable-next-line @typescript-eslint/dot-notation
-                outgoingRelationships: entity?.['outgoing'],
-                direction: RelationshipDirection.Outgoing,
-            }),
-            icon: getLogoFromPlatform(entity.dataFlow?.orchestrator || ''),
-            platform: entity?.dataFlow?.orchestrator || '',
+            icon: entity?.dataFlow?.platform?.properties?.logoUrl || '',
+            platform: getDataJobPlatformName(entity),
         };
     };
 

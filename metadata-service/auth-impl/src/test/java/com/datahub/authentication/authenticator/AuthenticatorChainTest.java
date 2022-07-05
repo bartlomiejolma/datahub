@@ -1,9 +1,11 @@
 package com.datahub.authentication.authenticator;
 
 import com.datahub.authentication.Authentication;
+
 import com.datahub.authentication.AuthenticationException;
+import com.datahub.authentication.AuthenticationExpiredException;
 import com.datahub.authentication.Authenticator;
-import com.datahub.authentication.AuthenticatorContext;
+import com.datahub.authentication.AuthenticationRequest;
 import org.mockito.Mockito;
 import org.testng.annotations.Test;
 
@@ -27,7 +29,7 @@ public class AuthenticatorChainTest {
     authenticatorChain.register(mockAuthenticator2);
 
     // Verify that the mock authentication is returned on Authenticate.
-    final AuthenticatorContext mockContext = Mockito.mock(AuthenticatorContext.class);
+    final AuthenticationRequest mockContext = Mockito.mock(AuthenticationRequest.class);
 
     Authentication result = authenticatorChain.authenticate(mockContext);
 
@@ -49,11 +51,26 @@ public class AuthenticatorChainTest {
     authenticatorChain.register(mockAuthenticator);
 
     // Verify that the mock authentication is returned on Authenticate.
-    final AuthenticatorContext mockContext = Mockito.mock(AuthenticatorContext.class);
+    final AuthenticationRequest mockContext = Mockito.mock(AuthenticationRequest.class);
 
     Authentication result = authenticatorChain.authenticate(mockContext);
 
     // If the authenticator throws, verify that null is returned to indicate failure to authenticate.
     assertNull(result);
+  }
+
+  @Test
+  public void testAuthenticateThrows() throws Exception {
+    final AuthenticatorChain authenticatorChain = new AuthenticatorChain();
+    final Authenticator mockAuthenticator = Mockito.mock(Authenticator.class);
+    final Authentication mockAuthentication = Mockito.mock(Authentication.class);
+    Mockito.when(mockAuthenticator.authenticate(Mockito.any())).thenThrow(new AuthenticationExpiredException("Failed to authenticate, token has expired"));
+
+    authenticatorChain.register(mockAuthenticator);
+
+    // Verify that the mock authentication is returned on Authenticate.
+    final AuthenticationRequest mockContext = Mockito.mock(AuthenticationRequest.class);
+
+    assertThrows(AuthenticationExpiredException.class, () -> authenticatorChain.authenticate(mockContext));
   }
 }

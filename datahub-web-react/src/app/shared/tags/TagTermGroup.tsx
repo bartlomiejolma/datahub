@@ -5,17 +5,20 @@ import styled from 'styled-components';
 import { BookOutlined, PlusOutlined } from '@ant-design/icons';
 
 import { useEntityRegistry } from '../../useEntityRegistry';
-import { EntityType, GlobalTags, GlossaryTerms, SubResourceType } from '../../../types.generated';
-import AddTagTermModal from './AddTagTermModal';
+import { Domain, EntityType, GlobalTags, GlossaryTerms, SubResourceType } from '../../../types.generated';
 import { StyledTag } from '../../entity/shared/components/styled/StyledTag';
-import { EMPTY_MESSAGES } from '../../entity/shared/constants';
+import { EMPTY_MESSAGES, ANTD_GRAY } from '../../entity/shared/constants';
 import { useRemoveTagMutation, useRemoveTermMutation } from '../../../graphql/mutations.generated';
+import { DomainLink } from './DomainLink';
+import { TagProfileDrawer } from './TagProfileDrawer';
+import AddTagsTermsModal from './AddTagsTermsModal';
 
 type Props = {
     uneditableTags?: GlobalTags | null;
     editableTags?: GlobalTags | null;
     editableGlossaryTerms?: GlossaryTerms | null;
     uneditableGlossaryTerms?: GlossaryTerms | null;
+    domain?: Domain | null;
     canRemove?: boolean;
     canAddTag?: boolean;
     canAddTerm?: boolean;
@@ -29,11 +32,12 @@ type Props = {
     refetch?: () => Promise<any>;
 };
 
-const TagWrapper = styled.div`
-    margin-bottom: -8px;
+const TermLink = styled(Link)`
+    display: inline-block;
+    margin-bottom: 8px;
 `;
 
-const TagLink = styled(Link)`
+const TagLink = styled.span`
     display: inline-block;
     margin-bottom: 8px;
 `;
@@ -42,6 +46,11 @@ const NoElementButton = styled(Button)`
     :not(:last-child) {
         margin-right: 8px;
     }
+`;
+
+const TagText = styled.span`
+    color: ${ANTD_GRAY[7]};
+    margin: 0 7px 0 0;
 `;
 
 export default function TagTermGroup({
@@ -56,6 +65,7 @@ export default function TagTermGroup({
     maxShow,
     uneditableGlossaryTerms,
     editableGlossaryTerms,
+    domain,
     entityUrn,
     entityType,
     entitySubresource,
@@ -71,6 +81,8 @@ export default function TagTermGroup({
         !uneditableGlossaryTerms?.terms?.length;
     const [removeTagMutation] = useRemoveTagMutation();
     const [removeTermMutation] = useRemoveTermMutation();
+    const [tagProfileDrawerVisible, setTagProfileDrawerVisible] = useState(false);
+    const [addTagUrn, setAddTagUrn] = useState('');
 
     const removeTag = (urnToRemove: string) => {
         onOpenModal?.();
@@ -112,9 +124,10 @@ export default function TagTermGroup({
     const removeTerm = (urnToRemove: string) => {
         onOpenModal?.();
         const termToRemove = editableGlossaryTerms?.terms?.find((term) => term.term.urn === urnToRemove);
+        const termName = termToRemove && entityRegistry.getDisplayName(termToRemove.term.type, termToRemove.term);
         Modal.confirm({
-            title: `Do you want to remove ${termToRemove?.term.name} term?`,
-            content: `Are you sure you want to remove the ${termToRemove?.term.name} tag?`,
+            title: `Do you want to remove ${termName} term?`,
+            content: `Are you sure you want to remove the ${termName} term?`,
             onOk() {
                 if (entityUrn) {
                     removeTermMutation({
@@ -148,18 +161,46 @@ export default function TagTermGroup({
 
     let renderedTags = 0;
 
+    const showTagProfileDrawer = (urn: string) => {
+        setTagProfileDrawerVisible(true);
+        setAddTagUrn(urn);
+    };
+
+    const closeTagProfileDrawer = () => {
+        setTagProfileDrawerVisible(false);
+    };
+
     return (
-        <TagWrapper>
-            {uneditableGlossaryTerms?.terms?.map((term) => (
-                <TagLink to={entityRegistry.getEntityUrl(EntityType.GlossaryTerm, term.term.urn)} key={term.term.urn}>
-                    <Tag closable={false}>
-                        {term.term.name}
-                        <BookOutlined style={{ marginLeft: '2%' }} />
-                    </Tag>
-                </TagLink>
-            ))}
+        <>
+            {domain && (
+                <DomainLink urn={domain.urn} name={entityRegistry.getDisplayName(EntityType.Domain, domain) || ''} />
+            )}
+            {uneditableGlossaryTerms?.terms?.map((term) => {
+                renderedTags += 1;
+                if (maxShow && renderedTags === maxShow + 1)
+                    return (
+                        <TagText>
+                            {uneditableGlossaryTerms?.terms
+                                ? `+${uneditableGlossaryTerms?.terms?.length - maxShow}`
+                                : null}
+                        </TagText>
+                    );
+                if (maxShow && renderedTags > maxShow) return null;
+
+                return (
+                    <TermLink
+                        to={entityRegistry.getEntityUrl(EntityType.GlossaryTerm, term.term.urn)}
+                        key={term.term.urn}
+                    >
+                        <Tag closable={false}>
+                            <BookOutlined style={{ marginRight: '3%' }} />
+                            {entityRegistry.getDisplayName(EntityType.GlossaryTerm, term.term)}
+                        </Tag>
+                    </TermLink>
+                );
+            })}
             {editableGlossaryTerms?.terms?.map((term) => (
-                <TagLink to={entityRegistry.getEntityUrl(EntityType.GlossaryTerm, term.term.urn)} key={term.term.urn}>
+                <TermLink to={entityRegistry.getEntityUrl(EntityType.GlossaryTerm, term.term.urn)} key={term.term.urn}>
                     <Tag
                         closable={canRemove}
                         onClose={(e) => {
@@ -167,19 +208,29 @@ export default function TagTermGroup({
                             removeTerm(term.term.urn);
                         }}
                     >
-                        {term.term.name}
-                        <BookOutlined style={{ marginLeft: '2%' }} />
+                        <BookOutlined style={{ marginRight: '3%' }} />
+                        {entityRegistry.getDisplayName(EntityType.GlossaryTerm, term.term)}
                     </Tag>
-                </TagLink>
+                </TermLink>
             ))}
             {/* uneditable tags are provided by ingestion pipelines exclusively */}
             {uneditableTags?.tags?.map((tag) => {
                 renderedTags += 1;
+                if (maxShow && renderedTags === maxShow + 1)
+                    return (
+                        <TagText>{uneditableTags?.tags ? `+${uneditableTags?.tags?.length - maxShow}` : null}</TagText>
+                    );
                 if (maxShow && renderedTags > maxShow) return null;
+
                 return (
-                    <TagLink to={entityRegistry.getEntityUrl(EntityType.Tag, tag.tag.urn)} key={tag.tag.urn}>
-                        <StyledTag $colorHash={tag.tag.urn} closable={false}>
-                            {tag.tag.name}
+                    <TagLink key={tag?.tag?.urn}>
+                        <StyledTag
+                            onClick={() => showTagProfileDrawer(tag?.tag?.urn)}
+                            $colorHash={tag?.tag?.urn}
+                            $color={tag?.tag?.properties?.colorHex}
+                            closable={false}
+                        >
+                            {entityRegistry.getDisplayName(EntityType.Tag, tag.tag)}
                         </StyledTag>
                     </TagLink>
                 );
@@ -189,20 +240,30 @@ export default function TagTermGroup({
                 renderedTags += 1;
                 if (maxShow && renderedTags > maxShow) return null;
                 return (
-                    <TagLink to={entityRegistry.getEntityUrl(EntityType.Tag, tag.tag.urn)} key={tag.tag.urn}>
+                    <TagLink>
                         <StyledTag
-                            $colorHash={tag.tag.urn}
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => showTagProfileDrawer(tag?.tag?.urn)}
+                            $colorHash={tag?.tag?.urn}
+                            $color={tag?.tag?.properties?.colorHex}
                             closable={canRemove}
                             onClose={(e) => {
                                 e.preventDefault();
-                                removeTag(tag.tag.urn);
+                                removeTag(tag?.tag?.urn);
                             }}
                         >
-                            {tag.tag.name}
+                            {tag?.tag?.name}
                         </StyledTag>
                     </TagLink>
                 );
             })}
+            {tagProfileDrawerVisible && (
+                <TagProfileDrawer
+                    closeTagProfileDrawer={closeTagProfileDrawer}
+                    tagProfileDrawerVisible={tagProfileDrawerVisible}
+                    urn={addTagUrn}
+                />
+            )}
             {showEmptyMessage && canAddTag && tagsEmpty && (
                 <Typography.Paragraph type="secondary">
                     {EMPTY_MESSAGES.tags.title}. {EMPTY_MESSAGES.tags.description}
@@ -223,7 +284,7 @@ export default function TagTermGroup({
                     {...buttonProps}
                 >
                     <PlusOutlined />
-                    Add Tag
+                    <span>Add Tags</span>
                 </NoElementButton>
             )}
             {canAddTerm &&
@@ -237,16 +298,14 @@ export default function TagTermGroup({
                         {...buttonProps}
                     >
                         <PlusOutlined />
-                        Add Term
+                        <span>Add Terms</span>
                     </NoElementButton>
                 )}
             {showAddModal && !!entityUrn && !!entityType && (
-                <AddTagTermModal
+                <AddTagsTermsModal
                     type={addModalType}
-                    globalTags={editableTags}
-                    glossaryTerms={editableGlossaryTerms}
                     visible
-                    onClose={() => {
+                    onCloseModal={() => {
                         onOpenModal?.();
                         setShowAddModal(false);
                         refetch?.();
@@ -256,6 +315,6 @@ export default function TagTermGroup({
                     entitySubresource={entitySubresource}
                 />
             )}
-        </TagWrapper>
+        </>
     );
 }

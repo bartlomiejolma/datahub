@@ -4,7 +4,7 @@
 
 To deploy a new instance of DataHub, perform the following steps.
 
-1. Install [docker](https://docs.docker.com/install/), [jq](https://stedolan.github.io/jq/download/) and [docker-compose](https://docs.docker.com/compose/install/) (if
+1. Install [docker](https://docs.docker.com/install/), [jq](https://stedolan.github.io/jq/download/) and [docker-compose v1 ](https://github.com/docker/compose/blob/master/INSTALL.md) (if
    using Linux). Make sure to allocate enough hardware resources for Docker engine. Tested & confirmed config: 2 CPUs,
    8GB RAM, 2GB Swap area, and 10GB disk space.
 
@@ -23,26 +23,64 @@ To deploy a new instance of DataHub, perform the following steps.
    datahub version
    ```
 
-   If you see "command not found", try running cli commands with the prefix 'python3 -m'
-   instead: `python3 -m datahub version`
+:::note
 
-4. To deploy DataHub, run the following CLI command from your terminal
+   If you see "command not found", try running cli commands with the prefix 'python3 -m' instead like `python3 -m datahub version`
+   Note that DataHub CLI does not support Python 2.x.
+
+:::
+
+4. To deploy a DataHub instance locally, run the following CLI command from your terminal
 
    ```
    datahub docker quickstart
    ```
 
+   This will deploy a DataHub instance using [docker-compose](https://docs.docker.com/compose/).
+
    Upon completion of this step, you should be able to navigate to the DataHub UI
    at [http://localhost:9002](http://localhost:9002) in your browser. You can sign in using `datahub` as both the
    username and password.
 
+   If you would like to modify/configure the DataHub installation in some way, please download the [docker-compose.yaml](https://raw.githubusercontent.com/datahub-project/datahub/master/docker/quickstart/docker-compose-without-neo4j-m1.quickstart.yml) used by the cli tool, modify it as necessary and deploy DataHub by passing the downloaded docker-compose file:
+   ```
+   datahub docker quickstart --quickstart-compose-file <path to compose file>
+   ```
+
 5. To ingest the sample metadata, run the following CLI command from your terminal
+
    ```
    datahub docker ingest-sample-data
    ```
 
-That's it! To start pushing your company's metadata into DataHub, take a look at
-the [Metadata Ingestion Framework](../metadata-ingestion/README.md).
+:::note
+
+If you've enabled [Metadata Service Authentication](authentication/introducing-metadata-service-authentication.md), you'll need to provide a Personal Access Token
+using the `--token <token>` parameter in the command.
+
+:::
+
+That's it! Now feel free to play around with DataHub!
+
+## Next Steps
+
+### Ingest Metadata
+
+To start pushing your company's metadata into DataHub, take a look at the [Metadata Ingestion Framework](../metadata-ingestion/README.md).
+
+### Invite Users
+
+To add users to your deployment to share with your team check out our [Adding Users to DataHub](authentication/guides/add-users.md)
+
+### Enable Authentication 
+
+To enable SSO, check out [Configuring OIDC Authentication](authentication/guides/sso/configure-oidc-react.md) or [Configuring JaaS Authentication](authentication/guides/jaas.md). 
+
+To enable backend Authentication, check out [authentication in DataHub's backend](authentication/introducing-metadata-service-authentication.md#Configuring Metadata Service Authentication). 
+
+### Move to Production
+
+We recommend deploying DataHub to production using Kubernetes. We provide helpful [Helm Charts](https://artifacthub.io/packages/helm/datahub/datahub) to help you quickly get up and running. Check out [Deploying DataHub to Kubernetes](./deploy/kubernetes.md) for a step-by-step walkthrough. 
 
 ## Resetting DataHub
 
@@ -51,6 +89,17 @@ To cleanse DataHub of all of it's state (e.g. before ingesting your own), you ca
 ```
 datahub docker nuke
 ```
+
+## Updating DataHub locally
+
+If you have been testing DataHub locally, a new version of DataHub got released and you want to try the new version then you can use below commands. 
+
+```
+datahub docker nuke --keep-data
+datahub docker quickstart
+```
+
+This will keep the data that you have ingested so far in DataHub and start a new quickstart with the latest version of DataHub.
 
 ## Troubleshooting
 

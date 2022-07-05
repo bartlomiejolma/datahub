@@ -1,12 +1,13 @@
 package com.linkedin.datahub.upgrade.nocode;
 
 import com.datahub.authentication.Authentication;
+import com.google.common.collect.ImmutableMap;
 import com.linkedin.datahub.upgrade.Upgrade;
 import com.linkedin.datahub.upgrade.UpgradeCleanupStep;
 import com.linkedin.datahub.upgrade.UpgradeStep;
 import com.linkedin.datahub.upgrade.common.steps.GMSEnableWriteModeStep;
 import com.linkedin.datahub.upgrade.common.steps.GMSQualificationStep;
-import com.linkedin.entity.client.EntityClient;
+import com.linkedin.entity.client.RestliEntityClient;
 import com.linkedin.metadata.entity.EntityService;
 import com.linkedin.metadata.models.registry.EntityRegistry;
 import io.ebean.EbeanServer;
@@ -30,14 +31,14 @@ public class NoCodeUpgrade implements Upgrade {
       final EntityService entityService,
       final EntityRegistry entityRegistry,
       final Authentication systemAuthentication,
-      final EntityClient entityClient) {
+      final RestliEntityClient entityClient) {
     _steps = buildUpgradeSteps(
         server,
         entityService,
         entityRegistry,
         systemAuthentication,
         entityClient);
-    _cleanupSteps = buildCleanupSteps(server);
+    _cleanupSteps = buildCleanupSteps();
   }
 
   @Override
@@ -55,7 +56,7 @@ public class NoCodeUpgrade implements Upgrade {
     return _cleanupSteps;
   }
 
-  private List<UpgradeCleanupStep> buildCleanupSteps(final EbeanServer server) {
+  private List<UpgradeCleanupStep> buildCleanupSteps() {
     return Collections.emptyList();
   }
 
@@ -64,10 +65,10 @@ public class NoCodeUpgrade implements Upgrade {
       final EntityService entityService,
       final EntityRegistry entityRegistry,
       final Authentication systemAuthentication,
-      final EntityClient entityClient) {
+      final RestliEntityClient entityClient) {
     final List<UpgradeStep> steps = new ArrayList<>();
     steps.add(new RemoveAspectV2TableStep(server));
-    steps.add(new GMSQualificationStep());
+    steps.add(new GMSQualificationStep(ImmutableMap.of("noCode", "true")));
     steps.add(new UpgradeQualificationStep(server));
     steps.add(new CreateAspectTableStep(server));
     steps.add(new DataMigrationStep(server, entityService, entityRegistry));

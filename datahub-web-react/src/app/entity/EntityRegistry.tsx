@@ -1,4 +1,4 @@
-import { EntityType, SearchResult } from '../../types.generated';
+import { Entity as EntityInterface, EntityType, SearchResult } from '../../types.generated';
 import { FetchedEntity } from '../lineage/types';
 import { Entity, IconStyleType, PreviewType } from './Entity';
 import { GenericEntityProperties } from './shared/types';
@@ -116,7 +116,32 @@ export default class EntityRegistry {
 
     getLineageVizConfig<T>(type: EntityType, data: T): FetchedEntity | undefined {
         const entity = validatedGet(type, this.entityTypeToEntity);
-        return entity.getLineageVizConfig?.(data) || undefined;
+        const genericEntityProperties = this.getGenericEntityProperties(type, data);
+        return (
+            ({
+                ...entity.getLineageVizConfig?.(data),
+                downstreamChildren: genericEntityProperties?.downstream?.relationships
+                    ?.filter((relationship) => relationship.entity)
+                    // eslint-disable-next-line @typescript-eslint/dot-notation
+                    ?.filter((relationship) => !relationship.entity?.['status']?.removed)
+                    ?.map((relationship) => ({
+                        entity: relationship.entity as EntityInterface,
+                        type: (relationship.entity as EntityInterface).type,
+                    })),
+                numDownstreamChildren: genericEntityProperties?.downstream?.total,
+                upstreamChildren: genericEntityProperties?.upstream?.relationships
+                    ?.filter((relationship) => relationship.entity)
+                    // eslint-disable-next-line @typescript-eslint/dot-notation
+                    ?.filter((relationship) => !relationship.entity?.['status']?.removed)
+                    ?.map((relationship) => ({
+                        entity: relationship.entity as EntityInterface,
+                        type: (relationship.entity as EntityInterface).type,
+                    })),
+                numUpstreamChildren: genericEntityProperties?.upstream?.total,
+                status: genericEntityProperties?.status,
+                siblingPlatforms: genericEntityProperties?.siblingPlatforms,
+            } as FetchedEntity) || undefined
+        );
     }
 
     getDisplayName<T>(type: EntityType, data: T): string {

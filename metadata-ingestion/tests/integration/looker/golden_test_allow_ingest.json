@@ -16,12 +16,14 @@
                             "created": {
                                 "time": 0,
                                 "actor": "urn:li:corpuser:unknown",
-                                "impersonator": null
+                                "impersonator": null,
+                                "message": null
                             },
                             "lastModified": {
                                 "time": 0,
                                 "actor": "urn:li:corpuser:unknown",
-                                "impersonator": null
+                                "impersonator": null,
+                                "message": null
                             },
                             "deleted": null
                         },
@@ -42,6 +44,8 @@
     "systemMetadata": {
         "lastObserved": 1586847600000,
         "runId": "looker-test",
+        "registryName": null,
+        "registryVersion": null,
         "properties": null
     }
 },
@@ -70,6 +74,8 @@
                             "looker.explore.file": "test_source_file.lkml"
                         },
                         "externalUrl": "https://looker.company.com/explore/data/my_view",
+                        "name": "My Explore View",
+                        "qualifiedName": null,
                         "description": "lorem ipsum",
                         "uri": null,
                         "tags": []
@@ -82,12 +88,14 @@
                                 "auditStamp": {
                                     "time": 0,
                                     "actor": "urn:li:corpuser:unknown",
-                                    "impersonator": null
+                                    "impersonator": null,
+                                    "message": null
                                 },
                                 "dataset": "urn:li:dataset:(urn:li:dataPlatform:looker,lkml_samples.view.underlying_view,PROD)",
                                 "type": "VIEW"
                             }
-                        ]
+                        ],
+                        "fineGrainedLineages": null
                     }
                 },
                 {
@@ -98,12 +106,14 @@
                         "created": {
                             "time": 0,
                             "actor": "urn:li:corpuser:unknown",
-                            "impersonator": null
+                            "impersonator": null,
+                            "message": null
                         },
                         "lastModified": {
                             "time": 0,
                             "actor": "urn:li:corpuser:unknown",
-                            "impersonator": null
+                            "impersonator": null,
+                            "message": null
                         },
                         "deleted": null,
                         "dataset": null,
@@ -120,6 +130,8 @@
                                 "jsonPath": null,
                                 "nullable": false,
                                 "description": "",
+                                "created": null,
+                                "lastModified": null,
                                 "type": {
                                     "type": {
                                         "com.linkedin.pegasus2avro.schema.StringType": {}
@@ -135,7 +147,9 @@
                                     ]
                                 },
                                 "glossaryTerms": null,
-                                "isPartOfKey": false
+                                "isPartOfKey": false,
+                                "isPartitioningKey": null,
+                                "jsonProps": null
                             }
                         ],
                         "primaryKeys": [],
@@ -150,6 +164,8 @@
     "systemMetadata": {
         "lastObserved": 1586847600000,
         "runId": "looker-test",
+        "registryName": null,
+        "registryVersion": null,
         "properties": null
     }
 },
@@ -164,7 +180,13 @@
         "value": "{\"typeNames\": [\"explore\"]}",
         "contentType": "application/json"
     },
-    "systemMetadata": null
+    "systemMetadata": {
+        "lastObserved": 1586847600000,
+        "runId": "looker-test",
+        "registryName": null,
+        "registryVersion": null,
+        "properties": null
+    }
 },
 {
     "auditHeader": null,
@@ -184,14 +206,16 @@
                         "lastModified": {
                             "time": 0,
                             "actor": "urn:li:corpuser:unknown",
-                            "impersonator": null
+                            "impersonator": null,
+                            "message": null
                         }
                     }
                 },
                 {
                     "com.linkedin.pegasus2avro.tag.TagProperties": {
                         "name": "Dimension",
-                        "description": "A tag that is applied to all dimension fields."
+                        "description": "A tag that is applied to all dimension fields.",
+                        "colorHex": null
                     }
                 }
             ]
@@ -201,6 +225,8 @@
     "systemMetadata": {
         "lastObserved": 1586847600000,
         "runId": "looker-test",
+        "registryName": null,
+        "registryVersion": null,
         "properties": null
     }
 },
@@ -222,14 +248,16 @@
                         "lastModified": {
                             "time": 0,
                             "actor": "urn:li:corpuser:unknown",
-                            "impersonator": null
+                            "impersonator": null,
+                            "message": null
                         }
                     }
                 },
                 {
                     "com.linkedin.pegasus2avro.tag.TagProperties": {
                         "name": "Temporal",
-                        "description": "A tag that is applied to all time-based (temporal) fields such as timestamps or durations."
+                        "description": "A tag that is applied to all time-based (temporal) fields such as timestamps or durations.",
+                        "colorHex": null
                     }
                 }
             ]
@@ -239,6 +267,8 @@
     "systemMetadata": {
         "lastObserved": 1586847600000,
         "runId": "looker-test",
+        "registryName": null,
+        "registryVersion": null,
         "properties": null
     }
 },
@@ -260,14 +290,16 @@
                         "lastModified": {
                             "time": 0,
                             "actor": "urn:li:corpuser:unknown",
-                            "impersonator": null
+                            "impersonator": null,
+                            "message": null
                         }
                     }
                 },
                 {
                     "com.linkedin.pegasus2avro.tag.TagProperties": {
                         "name": "Measure",
-                        "description": "A tag that is applied to all measures (metrics). Measures are typically the columns that you aggregate on"
+                        "description": "A tag that is applied to all measures (metrics). Measures are typically the columns that you aggregate on",
+                        "colorHex": null
                     }
                 }
             ]
@@ -277,6 +309,8 @@
     "systemMetadata": {
         "lastObserved": 1586847600000,
         "runId": "looker-test",
+        "registryName": null,
+        "registryVersion": null,
         "properties": null
     }
 }

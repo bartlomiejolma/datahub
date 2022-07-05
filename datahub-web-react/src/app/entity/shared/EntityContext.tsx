@@ -20,9 +20,9 @@ export const useBaseEntity = <T,>(): T => {
     return baseEntity as T;
 };
 
-export const useEntityUpdate = <U,>(): UpdateEntityType<U> => {
+export const useEntityUpdate = <U,>(): UpdateEntityType<U> | null | undefined => {
     const { updateEntity } = useContext(EntityContext);
-    return updateEntity as UpdateEntityType<U>;
+    return updateEntity;
 };
 
 export const useEntityData = () => {
@@ -43,4 +43,12 @@ export const useRefetch = () => {
 export const useLineageData = () => {
     const { lineage } = useContext(EntityContext);
     return lineage;
+};
+
+export const useMutationUrn = () => {
+    const { urn, entityData } = useContext(EntityContext);
+    if (!entityData?.siblings || entityData?.siblings?.isPrimary) {
+        return urn;
+    }
+    return entityData?.siblings?.siblings?.[0]?.urn || urn;
 };

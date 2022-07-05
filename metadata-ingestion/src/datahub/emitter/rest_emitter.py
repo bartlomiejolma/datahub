@@ -1,18 +1,17 @@
 import datetime
-import itertools
 import json
 import logging
-import shlex
 from json.decoder import JSONDecodeError
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
-import requests.adapters
+from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError, RequestException
 
-from datahub import __package_name__
-from datahub.configuration.common import OperationalError
+from datahub.cli.cli_utils import get_system_auth
+from datahub.configuration.common import ConfigurationError, OperationalError
 from datahub.emitter.mcp import MetadataChangeProposalWrapper
+from datahub.emitter.request_helper import _make_curl_command
 from datahub.emitter.serialization_helper import pre_json_transform
 from datahub.metadata.com.linkedin.pegasus2avro.mxe import (
     MetadataChangeEvent,
@@ -23,34 +22,28 @@ from datahub.metadata.com.linkedin.pegasus2avro.usage import UsageAggregation
 logger = logging.getLogger(__name__)
 
 
-def _make_curl_command(
-    session: requests.Session, method: str, url: str, payload: str
-) -> str:
-    fragments: List[str] = [
-        "curl",
-        *itertools.chain(
-            *[
-                ("-X", method),
-                *[("-H", f"{k}: {v}") for (k, v) in session.headers.items()],
-                ("--data", payload),
-            ]
-        ),
-        url,
-    ]
-    return " ".join(shlex.quote(fragment) for fragment in fragments)
-
-
-class DatahubRestEmitter:
+class DataHubRestEmitter:
     DEFAULT_CONNECT_TIMEOUT_SEC = 30  # 30 seconds should be plenty to connect
     DEFAULT_READ_TIMEOUT_SEC = (
         30  # Any ingest call taking longer than 30 seconds should be abandoned
     )
+    DEFAULT_RETRY_STATUS_CODES = [  # Additional status codes to retry on
+        429,
+        502,
+        503,
+        504,
+    ]
+    DEFAULT_RETRY_METHODS = ["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"]
+    DEFAULT_RETRY_MAX_TIMES = 3
 
     _gms_server: str
     _token: Optional[str]
     _session: requests.Session
     _connect_timeout_sec: float = DEFAULT_CONNECT_TIMEOUT_SEC
     _read_timeout_sec: float = DEFAULT_READ_TIMEOUT_SEC
+    _retry_status_codes: List[int] = DEFAULT_RETRY_STATUS_CODES
+    _retry_methods: List[str] = DEFAULT_RETRY_METHODS
+    _retry_max_times: int = DEFAULT_RETRY_MAX_TIMES
 
     def __init__(
         self,
@@ -58,20 +51,20 @@ class DatahubRestEmitter:
         token: Optional[str] = None,
         connect_timeout_sec: Optional[float] = None,
         read_timeout_sec: Optional[float] = None,
+        retry_status_codes: Optional[List[int]] = None,
+        retry_methods: Optional[List[str]] = None,
+        retry_max_times: Optional[int] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         ca_certificate_path: Optional[str] = None,
+        server_telemetry_id: Optional[str] = None,
+        disable_ssl_verification: bool = False,
     ):
-        if ":9002" in gms_server:
-            logger.warning(
-                "the rest emitter should connect to GMS (usually port 8080) instead of frontend"
-            )
         self._gms_server = gms_server
         self._token = token
+        self.server_config: Dict[str, Any] = {}
+        self.server_telemetry_id: str = ""
 
         self._session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
-        self._session.mount("http://", adapter)
-        self._session.mount("https://", adapter)
 
         self._session.headers.update(
             {
@@ -81,12 +74,19 @@ class DatahubRestEmitter:
         )
         if token:
             self._session.headers.update({"Authorization": f"Bearer {token}"})
+        else:
+            system_auth = get_system_auth()
+            if system_auth is not None:
+                self._session.headers.update({"Authorization": system_auth})
 
         if extra_headers:
             self._session.headers.update(extra_headers)
 
         if ca_certificate_path:
             self._session.verify = ca_certificate_path
+
+        if disable_ssl_verification:
+            self._session.verify = False
 
         if connect_timeout_sec:
             self._connect_timeout_sec = connect_timeout_sec
@@ -99,14 +99,61 @@ class DatahubRestEmitter:
                 f"Setting timeout values lower than 1 second is not recommended. Your configuration is connect_timeout:{self._connect_timeout_sec}s, read_timeout:{self._read_timeout_sec}s"
             )
 
-    def test_connection(self) -> None:
-        response = self._session.get(f"{self._gms_server}/config")
-        response.raise_for_status()
-        config: dict = response.json()
-        if config.get("noCode") != "true":
-            raise ValueError(
-                f"This version of {__package_name__} requires GMS v0.8.0 or higher"
+        if retry_status_codes is not None:  # Only if missing. Empty list is allowed
+            self._retry_status_codes = retry_status_codes
+
+        if retry_methods is not None:
+            self._retry_methods = retry_methods
+
+        if retry_max_times:
+            self._retry_max_times = retry_max_times
+
+        try:
+            retry_strategy = Retry(
+                total=self._retry_max_times,
+                status_forcelist=self._retry_status_codes,
+                backoff_factor=2,
+                allowed_methods=self._retry_methods,
             )
+        except TypeError:
+            # Prior to urllib3 1.26, the Retry class used `method_whitelist` instead of `allowed_methods`.
+            retry_strategy = Retry(
+                total=self._retry_max_times,
+                status_forcelist=self._retry_status_codes,
+                backoff_factor=2,
+                method_whitelist=self._retry_methods,
+            )
+
+        adapter = HTTPAdapter(
+            pool_connections=100, pool_maxsize=100, max_retries=retry_strategy
+        )
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
+
+    def test_connection(self) -> dict:
+        response = self._session.get(f"{self._gms_server}/config")
+        if response.status_code == 200:
+            config: dict = response.json()
+            if config.get("noCode") == "true":
+                self.server_config = config
+                return config
+
+            else:
+                # Looks like we either connected to an old GMS or to some other service. Let's see if we can determine which before raising an error
+                # A common misconfiguration is connecting to datahub-frontend so we special-case this check
+                if (
+                    config.get("config", {}).get("application") == "datahub-frontend"
+                    or config.get("config", {}).get("shouldShowDatasetLineage")
+                    is not None
+                ):
+                    message = "You seem to have connected to the frontend instead of the GMS endpoint. The rest emitter should connect to DataHub GMS (usually <datahub-gms-host>:8080) or Frontend GMS API (usually <frontend>:9002/api/gms)"
+                else:
+                    message = "You have either connected to a pre-v0.8.0 DataHub GMS instance, or to a different server altogether! Please check your configuration and make sure you are talking to the DataHub GMS endpoint."
+                raise ConfigurationError(message)
+        else:
+            auth_message = "Maybe you need to set up authentication? "
+            message = f"Unable to connect to {self._gms_server}/config with status_code: {response.status_code}. {auth_message if response.status_code == 401 else ''}Please check your configuration and make sure you are talking to the DataHub GMS (usually <datahub-gms-host>:8080) or Frontend GMS API (usually <frontend>:9002/api/gms)."
+            raise ConfigurationError(message)
 
     def emit(
         self,
@@ -201,3 +248,9 @@ class DatahubRestEmitter:
             raise OperationalError(
                 "Unable to emit metadata to DataHub GMS", {"message": str(e)}
             ) from e
+
+
+class DatahubRestEmitter(DataHubRestEmitter):
+    """This class exists as a pass-through for backwards compatibility"""
+
+    pass

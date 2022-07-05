@@ -1,8 +1,7 @@
 import { LineChartOutlined } from '@ant-design/icons';
 import * as React from 'react';
-import { Chart, EntityType, PlatformType, SearchResult } from '../../../types.generated';
+import { Chart, EntityType, SearchResult } from '../../../types.generated';
 import { Entity, IconStyleType, PreviewType } from '../Entity';
-import { getLogoFromPlatform } from '../../shared/getLogoFromPlatform';
 import { ChartPreview } from './preview/ChartPreview';
 import { GetChartQuery, useGetChartQuery, useUpdateChartMutation } from '../../../graphql/chart.generated';
 import { DocumentationTab } from '../shared/tabs/Documentation/DocumentationTab';
@@ -15,8 +14,8 @@ import { PropertiesTab } from '../shared/tabs/Properties/PropertiesTab';
 import { ChartInputsTab } from '../shared/tabs/Entity/ChartInputsTab';
 import { ChartDashboardsTab } from '../shared/tabs/Entity/ChartDashboardsTab';
 import { getDataForEntityType } from '../shared/containers/profile/utils';
-import { capitalizeFirstLetter } from '../../shared/capitalizeFirstLetter';
-import { EntityAndType } from '../../lineage/types';
+import { SidebarDomainSection } from '../shared/containers/profile/sidebar/Domain/SidebarDomainSection';
+import { EntityMenuItems } from '../shared/EntityDropdown/EntityDropdown';
 
 /**
  * Definition of the DataHub Chart entity.
@@ -70,6 +69,7 @@ export class ChartEntity implements Entity<Chart> {
             useEntityQuery={useGetChartQuery}
             useUpdateQuery={useUpdateChartMutation}
             getOverrideProperties={this.getOverridePropertiesFromEntity}
+            headerDropdownItems={new Set([EntityMenuItems.COPY_URL, EntityMenuItems.UPDATE_DEPRECATION])}
             tabs={[
                 {
                     name: 'Documentation',
@@ -110,29 +110,20 @@ export class ChartEntity implements Entity<Chart> {
                 {
                     component: SidebarOwnerSection,
                 },
+                {
+                    component: SidebarDomainSection,
+                },
             ]}
         />
     );
 
     getOverridePropertiesFromEntity = (chart?: Chart | null): GenericEntityProperties => {
         // TODO: Get rid of this once we have correctly formed platform coming back.
-        const tool = chart?.tool || '';
         const name = chart?.properties?.name;
         const externalUrl = chart?.properties?.externalUrl;
         return {
             name,
             externalUrl,
-            platform: {
-                urn: `urn:li:dataPlatform:(${tool})`,
-                type: EntityType.DataPlatform,
-                name: tool,
-                info: {
-                    logoUrl: getLogoFromPlatform(tool),
-                    displayName: capitalizeFirstLetter(tool),
-                    type: PlatformType.Others,
-                    datasetNameDelimiter: '.',
-                },
-            },
         };
     };
 
@@ -140,13 +131,16 @@ export class ChartEntity implements Entity<Chart> {
         return (
             <ChartPreview
                 urn={data.urn}
-                platform={data.tool}
+                platform={data.platform.properties?.displayName || data.platform.name}
                 name={data.properties?.name}
                 description={data.editableProperties?.description || data.properties?.description}
                 access={data.properties?.access}
                 owners={data.ownership?.owners}
                 tags={data?.globalTags || undefined}
                 glossaryTerms={data?.glossaryTerms}
+                logoUrl={data?.platform?.properties?.logoUrl}
+                domain={data.domain}
+                parentContainers={data.parentContainers}
             />
         );
     };
@@ -156,7 +150,8 @@ export class ChartEntity implements Entity<Chart> {
         return (
             <ChartPreview
                 urn={data.urn}
-                platform={data.tool}
+                platform={data.platform.properties?.displayName || data.platform.name}
+                platformInstanceId={data.dataPlatformInstance?.instanceId}
                 name={data.properties?.name}
                 description={data.editableProperties?.description || data.properties?.description}
                 access={data.properties?.access}
@@ -164,6 +159,8 @@ export class ChartEntity implements Entity<Chart> {
                 tags={data?.globalTags || undefined}
                 glossaryTerms={data?.glossaryTerms}
                 insights={result.insights}
+                logoUrl={data?.platform?.properties?.logoUrl || ''}
+                domain={data.domain}
             />
         );
     };
@@ -173,16 +170,8 @@ export class ChartEntity implements Entity<Chart> {
             urn: entity.urn,
             name: entity.properties?.name || '',
             type: EntityType.Chart,
-            // eslint-disable-next-line @typescript-eslint/dot-notation
-            upstreamChildren: entity?.['inputs']?.relationships?.map(
-                (relationship) => ({ entity: relationship.entity, type: relationship.entity.type } as EntityAndType),
-            ),
-            // eslint-disable-next-line @typescript-eslint/dot-notation
-            downstreamChildren: entity?.['dashboards']?.relationships?.map(
-                (relationship) => ({ entity: relationship.entity, type: relationship.entity.type } as EntityAndType),
-            ),
-            icon: getLogoFromPlatform(entity.tool),
-            platform: entity.tool,
+            icon: entity?.platform?.properties?.logoUrl || '',
+            platform: entity?.platform.properties?.displayName || entity?.platform.name,
         };
     };
 

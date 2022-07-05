@@ -14,7 +14,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
-import play.Play;
+import play.api.Play;
 import play.http.HttpEntity;
 import play.libs.ws.InMemoryBodyWritable;
 import play.libs.ws.StandaloneWSClient;
@@ -34,6 +34,7 @@ import play.shaded.ahc.org.asynchttpclient.AsyncHttpClientConfig;
 import play.shaded.ahc.org.asynchttpclient.DefaultAsyncHttpClient;
 import play.shaded.ahc.org.asynchttpclient.DefaultAsyncHttpClientConfig;
 import utils.ConfigUtil;
+import java.time.Duration;
 
 import static auth.AuthUtils.*;
 
@@ -58,7 +59,7 @@ public class Application extends Controller {
    */
   @Nonnull
   private Result serveAsset(@Nullable String path) {
-    InputStream indexHtml = Play.application().classloader().getResourceAsStream("public/index.html");
+    InputStream indexHtml = Play.current().classloader().getResourceAsStream("public/index.html");
     response().setHeader("Cache-Control", "no-cache");
     return ok(indexHtml).as("text/html");
   }
@@ -113,7 +114,8 @@ public class Application extends Controller {
             .toMap()
             .entrySet()
             .stream()
-            .filter(entry -> !AuthenticationConstants.LEGACY_X_DATAHUB_ACTOR_HEADER.equals(entry.getKey())) // Remove X-DataHub-Actor to prevent malicious delegation.
+            // Remove X-DataHub-Actor to prevent malicious delegation.
+            .filter(entry -> !AuthenticationConstants.LEGACY_X_DATAHUB_ACTOR_HEADER.equals(entry.getKey()))
             .filter(entry -> !Http.HeaderNames.CONTENT_LENGTH.equals(entry.getKey()))
             .filter(entry -> !Http.HeaderNames.CONTENT_TYPE.equals(entry.getKey()))
             .filter(entry -> !Http.HeaderNames.AUTHORIZATION.equals(entry.getKey()))
@@ -122,6 +124,7 @@ public class Application extends Controller {
         .addHeader(Http.HeaderNames.AUTHORIZATION, authorizationHeaderValue)
         .addHeader(AuthenticationConstants.LEGACY_X_DATAHUB_ACTOR_HEADER, getDataHubActorHeader())
         .setBody(new InMemoryBodyWritable(ByteString.fromByteBuffer(request().body().asBytes().asByteBuffer()), "application/json"))
+        .setRequestTimeout(Duration.ofSeconds(120))
         .execute()
         .thenApply(apiResponse -> {
           final ResponseHeader header = new ResponseHeader(apiResponse.getStatus(), apiResponse.getHeaders()
@@ -144,6 +147,7 @@ public class Application extends Controller {
   @Nonnull
   public Result appConfig() {
     final ObjectNode config = Json.newObject();
+    config.put("application", "datahub-frontend");
     config.put("appVersion", _config.getString("app.version"));
     config.put("isInternal", _config.getBoolean("linkedin.internal"));
     config.put("shouldShowDatasetLineage", _config.getBoolean("linkedin.show.dataset.lineage"));

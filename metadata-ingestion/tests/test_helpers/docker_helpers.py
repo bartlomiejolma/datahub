@@ -26,6 +26,7 @@ def wait_for_port(
     container_port: int,
     hostname: str = None,
     timeout: float = 30.0,
+    pause: float = 0.5,
 ) -> None:
     # import pdb
 
@@ -34,7 +35,7 @@ def wait_for_port(
         # port = docker_services.port_for(container_name, container_port)
         docker_services.wait_until_responsive(
             timeout=timeout,
-            pause=0.5,
+            pause=pause,
             check=lambda: is_responsive(container_name, container_port, hostname),
         )
     finally:
@@ -42,7 +43,7 @@ def wait_for_port(
         subprocess.run(f"docker logs {container_name}", shell=True, check=True)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def docker_compose_runner(docker_compose_project_name, docker_cleanup):
     @contextlib.contextmanager
     def run(
